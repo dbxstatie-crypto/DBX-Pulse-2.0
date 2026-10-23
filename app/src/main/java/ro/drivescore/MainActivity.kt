@@ -370,6 +370,14 @@ class MainActivity : Activity() {
         return c
     }
 
+    private fun stat(label: String, value: String): LinearLayout {
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.addView(tv(label, 10f, Ui.MUTED))
+        col.addView(tv(value, 17f, Ui.TEXT, true))
+        return col
+    }
+
     private fun statTile(icon: Int, label: String, value: String): LinearLayout {
         val t = LinearLayout(this)
         t.gravity = Gravity.CENTER_VERTICAL
