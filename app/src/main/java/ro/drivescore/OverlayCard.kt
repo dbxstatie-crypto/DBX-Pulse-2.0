@@ -10,15 +10,16 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 object Ui {
-    val BG = Color.parseColor("#0B0F14")
-    val SURFACE = Color.parseColor("#151B23")
-    val SURFACE2 = Color.parseColor("#1D2530")
-    val TEXT = Color.parseColor("#E6EDF3")
-    val MUTED = Color.parseColor("#8B98A5")
-    val GREEN = Color.parseColor("#22C55E")
+    val BG = Color.parseColor("#06120C")
+    val SURFACE = Color.parseColor("#0E1F16")
+    val SURFACE2 = Color.parseColor("#15392A")
+    val TEXT = Color.parseColor("#E8F7EE")
+    val MUTED = Color.parseColor("#86A595")
+    val GREEN = Color.parseColor("#2BE673")
     val AMBER = Color.parseColor("#F5B301")
     val RED = Color.parseColor("#EF4444")
-    val ACCENT = Color.parseColor("#3B82F6")
+    val ON_ACCENT = Color.parseColor("#04140B")
+    val ACCENT = Color.parseColor("#22D866")
 
     fun levelColor(l: Level): Int = when (l) {
         Level.GOOD -> GREEN

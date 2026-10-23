@@ -22,6 +22,16 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
+import android.app.DatePickerDialog
+import android.content.ClipData
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
+import android.os.Build
+import android.provider.MediaStore
+import android.widget.ImageView
+import java.time.LocalDate
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -38,6 +48,9 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var tabHistory: TextView
     private lateinit var tabZones: TextView
+    private lateinit var tabsBar: LinearLayout
+    private lateinit var tabDocs: TextView
+    private var askedNotif = false
     private lateinit var tabSettings: TextView
     private var zoneMap: MapView? = null
     private var tab = 0
@@ -107,10 +120,13 @@ class MainActivity : Activity() {
         tabs.setPadding(dp(16), dp(4), dp(16), dp(8))
         tabHistory = tabView("Istoric") { tab = 0; render() }
         tabZones = tabView("Zone") { tab = 1; render() }
+        tabDocs = tabView("Acte") { tab = 3; render() }
         tabSettings = tabView("Setări") { tab = 2; render() }
         tabs.addView(tabHistory, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         tabs.addView(tabZones, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        tabs.addView(tabDocs, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         tabs.addView(tabSettings, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        tabsBar = tabs
         root.addView(tabs)
 
         content = LinearLayout(this)
@@ -121,10 +137,20 @@ class MainActivity : Activity() {
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
         setContentView(root)
+        tab = intent.getIntExtra("tab", tab)
+        Docs.schedule(this)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        tab = intent.getIntExtra("tab", tab)
+        render()
     }
 
     override fun onResume() {
         super.onResume()
+        Docs.check(this)
         updateStatus()
         render()
         Cloud.syncAsync(this) { if (!isFinishing && tab == 1) render() }
@@ -163,9 +189,21 @@ class MainActivity : Activity() {
 
     private fun render() {
         simRefresh = null
+        if (Cloud.configured() && !Cloud.loggedIn(this)) {
+            // fără cont: doar ecranul de autentificare, restul aplicației apare după login
+            tabsBar.visibility = View.GONE
+            zoneMap?.onDetach()
+            zoneMap = null
+            content.removeAllViews()
+            renderLogin()
+            return
+        }
+        tabsBar.visibility = View.VISIBLE
         tabHistory.background = Ui.rounded(if (tab == 0) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
         tabZones.background = Ui.rounded(if (tab == 1) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
         tabSettings.background = Ui.rounded(if (tab == 2) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
+        tabDocs.background = Ui.rounded(if (tab == 3) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
+        tabDocs.setTextColor(if (tab == 3) Ui.TEXT else Ui.MUTED)
         tabHistory.setTextColor(if (tab == 0) Ui.TEXT else Ui.MUTED)
         tabZones.setTextColor(if (tab == 1) Ui.TEXT else Ui.MUTED)
         tabSettings.setTextColor(if (tab == 2) Ui.TEXT else Ui.MUTED)
@@ -175,6 +213,7 @@ class MainActivity : Activity() {
         when (tab) {
             0 -> renderHistory()
             1 -> renderZones()
+            3 -> renderDocs()
             else -> renderSettings()
         }
     }
@@ -292,9 +331,122 @@ class MainActivity : Activity() {
     }
 
 
+    // ---------- ACTE ----------
+    private fun pickDate(initial: Long, onPick: (Long) -> Unit) {
+        val d = LocalDate.ofEpochDay(initial)
+        DatePickerDialog(this, { _, y, m, day -> onPick(Docs.epochOf(y, m, day)) }, d.year, d.monthValue - 1, d.dayOfMonth).show()
+    }
+
+    private fun takePhoto(id: Long) {
+        val name = "doc_" + id + "_" + System.currentTimeMillis() + ".jpg"
+        Store.setRaw(this, "pending_photo", "$id|$name")
+        val uri = Uri.parse("content://ro.drivescore.photos/$name")
+        val i = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        i.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        i.clipData = ClipData.newRawUri("", uri)
+        i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try { startActivityForResult(i, 77) } catch (e: Exception) {
+            Toast.makeText(this, "Nu am găsit o aplicație de cameră.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 77) return
+        val p = (Store.raw(this, "pending_photo") ?: "").split("|")
+        if (p.size == 2) {
+            val id = p[0].toLongOrNull() ?: 0L
+            val f = Docs.photoFile(this, p[1])
+            if (resultCode == RESULT_OK && f.exists() && f.length() > 0) {
+                Docs.load(this).firstOrNull { it.id == id }?.let { if (it.photo.isNotEmpty()) Docs.photoFile(this, it.photo).delete() }
+                Docs.update(this, id) { it.copy(photo = p[1]) }
+            } else f.delete()
+        }
+        Store.setRaw(this, "pending_photo", "")
+        render()
+    }
+
+    private fun showPhoto(d: DocItem) {
+        val f = Docs.photoFile(this, d.photo)
+        val opts = BitmapFactory.Options()
+        opts.inSampleSize = 4
+        var bmp = BitmapFactory.decodeFile(f.path, opts)
+        if (bmp == null) { Toast.makeText(this, "Poza nu mai există.", Toast.LENGTH_SHORT).show(); return }
+        try {
+            val rot = when (ExifInterface(f.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1)) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+            if (rot != 0f) { val m = Matrix(); m.postRotate(rot); bmp = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true) }
+        } catch (e: Exception) { }
+        val iv = ImageView(this)
+        iv.setImageBitmap(bmp)
+        iv.adjustViewBounds = true
+        AlertDialog.Builder(this).setTitle(d.type).setView(iv)
+            .setPositiveButton("Închide", null)
+            .setNeutralButton("Poză nouă") { _, _ -> takePhoto(d.id) }
+            .show()
+    }
+
+    private fun renderDocs() {
+        if (Build.VERSION.SDK_INT >= 33 && !askedNotif &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            askedNotif = true
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        }
+        val head = card()
+        head.addView(tv("ACTE ȘI VALABILITATE", 12f, Ui.MUTED, true))
+        head.addView(tv("Adaugă rovinieta, ITP-ul, RCA-ul etc. cu data de expirare și o poză. Cu 3 zile înainte primești o notificare în fiecare zi, până apeși „Am rezolvat”.", 13f, Ui.TEXT))
+        head.addView(button("+ Adaugă act") {
+            AlertDialog.Builder(this).setTitle("Ce act adaugi?").setItems(Docs.TYPES) { _, which ->
+                pickDate(Docs.today() + 365) { exp ->
+                    val id = Docs.add(this, Docs.TYPES[which], exp)
+                    render()
+                    AlertDialog.Builder(this).setMessage("Faci o poză actului acum?")
+                        .setPositiveButton("Da") { _, _ -> takePhoto(id) }
+                        .setNegativeButton("Mai târziu", null).show()
+                }
+            }.show()
+        })
+        content.addView(head)
+        for (d in Docs.load(this)) {
+            val left = d.expiry - Docs.today()
+            val col = if (left < 0) Ui.RED else if (left <= Docs.WARN_DAYS) Ui.AMBER else Ui.GREEN
+            val c = card()
+            c.addView(tv(d.type, 16f, Ui.TEXT, true))
+            c.addView(tv("Valabil până la " + Docs.fmt(d.expiry), 13f, Ui.MUTED))
+            c.addView(tv(Docs.statusText(left).replaceFirstChar { it.uppercase() }, 14f, col, true))
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            fun sb(label: String, onClick: () -> Unit) {
+                val b = button(label, onClick)
+                b.textSize = 13f
+                val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                lp.setMargins(dp(3), dp(10), dp(3), 0)
+                b.layoutParams = lp
+                row.addView(b)
+            }
+            sb(if (d.photo.isEmpty()) "Poză" else "Vezi poză") { if (d.photo.isEmpty()) takePhoto(d.id) else showPhoto(d) }
+            sb("Am rezolvat") {
+                Toast.makeText(this, "Alege noua dată de expirare.", Toast.LENGTH_SHORT).show()
+                pickDate(maxOf(d.expiry, Docs.today()) + 365) { exp -> Docs.update(this, d.id) { it.copy(expiry = exp, lastNotif = -1) }; render() }
+            }
+            sb("Șterge") {
+                AlertDialog.Builder(this).setMessage("Ștergi ${d.type}?")
+                    .setPositiveButton("Șterge") { _, _ -> Docs.delete(this, d.id); render() }
+                    .setNegativeButton("Anulează", null).show()
+            }
+            c.addView(row)
+            content.addView(c)
+        }
+    }
+
     // ---------- ZONE ----------
     private fun button(text: String, onClick: () -> Unit): TextView {
-        val b = tv(text, 14f, Ui.TEXT, true)
+        val b = tv(text, 14f, Ui.ON_ACCENT, true)
         b.gravity = Gravity.CENTER
         b.setPadding(dp(14), dp(12), dp(14), dp(12))
         b.background = Ui.rounded(Ui.ACCENT, dp(12).toFloat())
@@ -485,6 +637,32 @@ class MainActivity : Activity() {
     private fun refreshAfter(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         if (!isFinishing) render()
+    }
+
+    private fun renderLogin() {
+        val c = card()
+        c.addView(tv("Bun venit", 22f, Ui.TEXT, true))
+        c.addView(tv("Intră în cont sau creează unul cu email și parolă.", 13f, Ui.MUTED))
+        val emailF = textField("Email", false, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+        val passF = textField("Parolă (minim 6 caractere)", false, InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        c.addView(emailF)
+        c.addView(passF)
+        fun go(create: Boolean) {
+            val em = emailF.text.toString().trim()
+            val pw = passF.text.toString()
+            if (em.isEmpty() || pw.isEmpty()) {
+                Toast.makeText(this, "Completează emailul și parola.", Toast.LENGTH_SHORT).show()
+                return
+            }
+            Cloud.signIn(this, em, pw, create) { ok, msg ->
+                if (ok) Cloud.syncAsync(this, true) { if (!isFinishing && tab == 1) render() }
+                refreshAfter(msg)
+            }
+        }
+        c.addView(button("Intru în cont") { go(false) })
+        c.addView(button("Creez cont") { go(true) })
+        c.addView(tv("Prin „Creez cont” ești de acord ca locația, ora, prețul și km ale ofertelor tale să fie trimise în contul comun; ceilalți șoferi văd doar zone agregate, fără nume sau ID. Îți poți șterge datele oricând din Setări.", 12f, Ui.MUTED))
+        content.addView(c)
     }
 
     private fun renderCloudCard() {
