@@ -117,17 +117,31 @@ class MainActivity : Activity() {
         // taburi
         val tabs = LinearLayout(this)
         tabs.orientation = LinearLayout.HORIZONTAL
-        tabs.setPadding(dp(16), dp(4), dp(16), dp(8))
-        tabHistory = tabView("Istoric") { tab = 0; render() }
-        tabZones = tabView("Zone") { tab = 1; render() }
-        tabDocs = tabView("Acte") { tab = 3; render() }
-        tabSettings = tabView("Setări") { tab = 2; render() }
-        tabs.addView(tabHistory, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        tabs.addView(tabZones, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        tabs.addView(tabDocs, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        tabs.addView(tabSettings, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        tabs.setPadding(dp(8), dp(6), dp(8), dp(10))
+        tabHistory = tabView("Acasă", R.drawable.ic_nav_home) { tab = 0; render() }
+        tabZones = tabView("Zone", R.drawable.ic_nav_zone) { tab = 1; render() }
+        tabDocs = tabView("Acte", R.drawable.ic_nav_docs) { tab = 3; render() }
+        tabSettings = tabView("Setări", R.drawable.ic_nav_gear) { tab = 2; render() }
+        val bolt = ImageView(this)
+        bolt.setImageResource(R.drawable.ic_nav_bolt)
+        bolt.setPadding(dp(14), dp(14), dp(14), dp(14))
+        bolt.background = Ui.rounded(Ui.GREEN, dp(26).toFloat())
+        bolt.setOnClickListener {
+            if (!serviceEnabled()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            else Toast.makeText(this, "Activ – cardul apare automat în Bolt Driver", Toast.LENGTH_SHORT).show()
+        }
+        val boltWrap = LinearLayout(this)
+        boltWrap.gravity = Gravity.CENTER
+        boltWrap.addView(bolt, LinearLayout.LayoutParams(dp(52), dp(52)))
+        val w1 = { LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
+        tabs.addView(tabHistory, w1())
+        tabs.addView(tabZones, w1())
+        tabs.addView(boltWrap, w1())
+        tabs.addView(tabDocs, w1())
+        tabs.addView(tabSettings, w1())
+        tabs.gravity = Gravity.CENTER_VERTICAL
+        tabs.setBackgroundColor(Ui.SURFACE)
         tabsBar = tabs
-        root.addView(tabs)
 
         content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
@@ -135,6 +149,7 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this)
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(tabs)
 
         setContentView(root)
         tab = intent.getIntExtra("tab", tab)
@@ -166,15 +181,20 @@ class MainActivity : Activity() {
         render()
     }
 
-    private fun tabView(label: String, onClick: () -> Unit): TextView {
-        val t = tv(label, 15f, Ui.TEXT, true)
+    private fun tabView(label: String, icon: Int, onClick: () -> Unit): TextView {
+        val t = tv(label, 11f, Ui.MUTED, true)
         t.gravity = Gravity.CENTER
-        t.setPadding(0, dp(10), 0, dp(10))
+        t.setPadding(0, dp(4), 0, dp(2))
+        t.compoundDrawablePadding = dp(2)
+        t.setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0)
         t.setOnClickListener { onClick() }
-        val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        lp.setMargins(dp(4), 0, dp(4), 0)
-        t.layoutParams = lp
         return t
+    }
+
+    private fun styleTab(t: TextView, active: Boolean) {
+        val col = if (active) Ui.GREEN else Ui.MUTED
+        t.setTextColor(col)
+        t.compoundDrawables[1]?.mutate()?.setTint(col)
     }
 
     private fun updateStatus() {
@@ -199,14 +219,10 @@ class MainActivity : Activity() {
             return
         }
         tabsBar.visibility = View.VISIBLE
-        tabHistory.background = Ui.rounded(if (tab == 0) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
-        tabZones.background = Ui.rounded(if (tab == 1) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
-        tabSettings.background = Ui.rounded(if (tab == 2) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
-        tabDocs.background = Ui.rounded(if (tab == 3) Ui.SURFACE2 else Ui.BG, dp(14).toFloat())
-        tabDocs.setTextColor(if (tab == 3) Ui.TEXT else Ui.MUTED)
-        tabHistory.setTextColor(if (tab == 0) Ui.TEXT else Ui.MUTED)
-        tabZones.setTextColor(if (tab == 1) Ui.TEXT else Ui.MUTED)
-        tabSettings.setTextColor(if (tab == 2) Ui.TEXT else Ui.MUTED)
+        styleTab(tabHistory, tab == 0)
+        styleTab(tabZones, tab == 1)
+        styleTab(tabDocs, tab == 3)
+        styleTab(tabSettings, tab == 2)
         zoneMap?.onDetach()
         zoneMap = null
         content.removeAllViews()
