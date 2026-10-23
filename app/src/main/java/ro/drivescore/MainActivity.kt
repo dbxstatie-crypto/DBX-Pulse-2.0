@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private lateinit var tabsBar: LinearLayout
     private lateinit var tabDocs: TextView
     private var askedNotif = false
+    private var splashDone = false
     private lateinit var tabSettings: TextView
     private var zoneMap: MapView? = null
     private var tab = 0
@@ -215,7 +216,7 @@ class MainActivity : Activity() {
             zoneMap?.onDetach()
             zoneMap = null
             content.removeAllViews()
-            renderLogin()
+            if (!splashDone) renderSplash() else renderLogin()
             return
         }
         tabsBar.visibility = View.VISIBLE
@@ -655,12 +656,66 @@ class MainActivity : Activity() {
         if (!isFinishing) render()
     }
 
+    private fun renderSplash() {
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER_HORIZONTAL
+        val logo = LinearLayout(this)
+        logo.gravity = Gravity.CENTER_VERTICAL
+        val dbx = tv("DBX", 44f, Ui.TEXT, true)
+        dbx.setTypeface(dbx.typeface, Typeface.BOLD_ITALIC)
+        logo.addView(dbx)
+        val pl = ImageView(this)
+        pl.setImageResource(R.drawable.ic_pulse)
+        logo.addView(pl)
+        col.addView(logo)
+        val pulse = tv("Pulse", 38f, Ui.GREEN, true)
+        pulse.setTypeface(pulse.typeface, Typeface.BOLD_ITALIC)
+        col.addView(pulse)
+        val tag = tv("Statistici inteligente\npentru șoferi Bolt", 17f, Ui.TEXT)
+        tag.gravity = Gravity.CENTER
+        tag.setPadding(0, dp(12), 0, dp(8))
+        col.addView(tag)
+        val car = ImageView(this)
+        car.setImageResource(R.drawable.bg_car)
+        car.adjustViewBounds = true
+        car.scaleType = ImageView.ScaleType.FIT_CENTER
+        col.addView(car, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        fun feat(icon: Int, t: String, sub: String) {
+            val f = LinearLayout(this)
+            f.orientation = LinearLayout.VERTICAL
+            f.gravity = Gravity.CENTER_HORIZONTAL
+            f.setPadding(dp(6), dp(14), dp(6), dp(14))
+            f.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat())
+            val i = ImageView(this)
+            i.setImageResource(icon)
+            i.setColorFilter(Ui.GREEN)
+            f.addView(i, LinearLayout.LayoutParams(dp(30), dp(30)))
+            val a = tv(t, 13f, Ui.TEXT, true); a.gravity = Gravity.CENTER; a.setPadding(0, dp(8), 0, dp(4))
+            val b = tv(sub, 11f, Ui.MUTED); b.gravity = Gravity.CENTER
+            f.addView(a); f.addView(b)
+            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(dp(4), 0, dp(4), 0)
+            row.addView(f, lp)
+        }
+        feat(R.drawable.ic_nav_bars, "Urmărește câștigurile", "Vezi veniturile în timp real")
+        feat(R.drawable.ic_nav_zone, "Analizează zonele", "Află cele mai bune zone din oraș")
+        feat(R.drawable.ic_nav_docs, "Gestionează actele", "Păstrează totul într-un singur loc")
+        col.addView(row)
+        col.addView(button("Intră în aplicație  →") { splashDone = true; render() })
+        content.addView(col)
+    }
+
     private fun renderLogin() {
         val c = card()
         c.addView(tv("Bun venit", 22f, Ui.TEXT, true))
         c.addView(tv("Intră în cont sau creează unul cu email și parolă.", 13f, Ui.MUTED))
         val emailF = textField("Email", false, InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
         val passF = textField("Parolă (minim 6 caractere)", false, InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        val nickF = textField("Nume sau nickname (la cont nou)", false)
+        c.addView(nickF)
         c.addView(emailF)
         c.addView(passF)
         fun go(create: Boolean) {
@@ -670,6 +725,11 @@ class MainActivity : Activity() {
                 Toast.makeText(this, "Completează emailul și parola.", Toast.LENGTH_SHORT).show()
                 return
             }
+            if (create && nickF.text.toString().trim().isEmpty()) {
+                Toast.makeText(this, "Scrie un nume sau nickname.", Toast.LENGTH_SHORT).show()
+                return
+            }
+            Store.setRaw(this, "pending_nick", nickF.text.toString().trim())
             Cloud.signIn(this, em, pw, create) { ok, msg ->
                 if (ok) Cloud.syncAsync(this, true) { if (!isFinishing && tab == 1) render() }
                 refreshAfter(msg)

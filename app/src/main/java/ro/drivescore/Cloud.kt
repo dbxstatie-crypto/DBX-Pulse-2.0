@@ -149,7 +149,9 @@ object Cloud {
         } else {
             Store.setRaw(c, "cloud_member", "")
             // fără cod de invitație: intri automat în comunitate, cu numele din email
-            val nm = (Store.raw(c, "cloud_email") ?: "").substringBefore('@').take(40).ifEmpty { "Utilizator" }
+            val nick = (Store.raw(c, "pending_nick") ?: "").trim()
+            Store.setRaw(c, "pending_nick", "")
+            val nm = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
             val jr = call("POST", "/rest/v1/rpc/join_community", JSONObject().put("p_name", nm).toString(), tok)
             if (jr.code in 200..299) {
                 Store.setRaw(c, "cloud_member", "1")
