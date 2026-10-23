@@ -22,6 +22,8 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
+import android.graphics.drawable.GradientDrawable
+import android.widget.FrameLayout
 import android.app.DatePickerDialog
 import android.content.ClipData
 import android.content.pm.PackageManager
@@ -52,6 +54,7 @@ class MainActivity : Activity() {
     private lateinit var tabDocs: TextView
     private var askedNotif = false
     private var splashDone = false
+    private var showAllRides = false
     private lateinit var tabSettings: TextView
     private var zoneMap: MapView? = null
     private var tab = 0
@@ -106,9 +109,19 @@ class MainActivity : Activity() {
         val header = LinearLayout(this)
         header.orientation = LinearLayout.VERTICAL
         header.setPadding(dp(20), dp(18), dp(20), dp(8))
-        header.addView(tv("DBX Pulse", 26f, Ui.TEXT, true))
+        val logoRow = LinearLayout(this)
+        logoRow.gravity = Gravity.CENTER_VERTICAL
+        val l1 = tv("DBX ", 28f, Ui.TEXT, true); l1.setTypeface(l1.typeface, Typeface.BOLD_ITALIC)
+        val l2 = tv("Pulse", 28f, Ui.GREEN, true); l2.setTypeface(l2.typeface, Typeface.BOLD_ITALIC)
+        val l3 = ImageView(this); l3.setImageResource(R.drawable.ic_pulse)
+        logoRow.addView(l1); logoRow.addView(l2)
+        logoRow.addView(l3, LinearLayout.LayoutParams(dp(30), dp(26)))
+        header.addView(logoRow)
+        header.addView(tv("Statistici inteligente pentru șoferi Bolt", 13f, Ui.TEXT))
         statusView = tv("", 13f, Ui.MUTED)
-        statusView.setPadding(0, dp(4), 0, 0)
+        statusView.setPadding(dp(12), dp(6), dp(12), dp(6))
+        statusView.background = Ui.rounded(Ui.SURFACE, dp(14).toFloat())
+        (statusView.layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(8)
         statusView.setOnClickListener {
             if (!serviceEnabled()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
@@ -246,8 +259,10 @@ class MainActivity : Activity() {
         val dayStart = cal.timeInMillis
         val today = rides.filter { it.ts >= dayStart }
 
+        content.addView(welcomeBanner())
         content.addView(summaryCard("AZI", today))
         content.addView(summaryCard("TOTAL", rides))
+        content.addView(quickActions())
 
         if (rides.isEmpty()) {
             val c = card()
@@ -264,7 +279,17 @@ class MainActivity : Activity() {
         }
 
         val fmt = SimpleDateFormat("dd.MM  HH:mm", Locale.forLanguageTag("ro-RO"))
-        for (r in rides.take(200)) {
+        val hd = LinearLayout(this)
+        hd.gravity = Gravity.CENTER_VERTICAL
+        hd.setPadding(0, dp(4), 0, dp(8))
+        hd.addView(tv("Ultimele curse", 19f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (rides.size > 4) {
+            val all = tv(if (showAllRides) "Mai puține" else "Vezi toate →", 14f, Ui.GREEN, true)
+            all.setOnClickListener { showAllRides = !showAllRides; render() }
+            hd.addView(all)
+        }
+        content.addView(hd)
+        for (r in rides.take(if (showAllRides) 200 else 4)) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
@@ -323,28 +348,99 @@ class MainActivity : Activity() {
 
     private fun summaryCard(title: String, rides: List<Ride>): LinearLayout {
         val c = card()
-        c.addView(tv(title, 12f, Ui.MUTED, true))
+        val dateTxt = if (title == "AZI") SimpleDateFormat("d MMMM yyyy", Locale.forLanguageTag("ro-RO")).format(Date()) else "toate cursele"
+        val head = LinearLayout(this)
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.addView(tv(title, 17f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(tv(dateTxt, 12f, Ui.MUTED))
+        c.addView(head)
         val net = rides.sumOf { it.net }
         val km = rides.sumOf { it.totalKm }
         val avg = if (km > 0) net / km else 0.0
-
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.setPadding(0, dp(6), 0, 0)
-        row.addView(stat("CURSE", rides.size.toString()), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(stat("NET", Fmt.d1(net) + " lei"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f))
-        row.addView(stat("KM", Fmt.d1(km)), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(stat("NET/KM", Fmt.d2(avg)), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        c.addView(row)
+        fun row(a: LinearLayout, b: LinearLayout) {
+            val r = LinearLayout(this)
+            r.setPadding(0, dp(8), 0, 0)
+            val l1 = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = dp(4)
+            val l2 = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); l2.leftMargin = dp(4)
+            r.addView(a, l1); r.addView(b, l2)
+            c.addView(r)
+        }
+        row(statTile(R.drawable.ic_st_car, "Curse", rides.size.toString()), statTile(R.drawable.ic_st_wallet, "Net", Fmt.d2(net) + " lei"))
+        row(statTile(R.drawable.ic_st_road, "KM", Fmt.d1(km)), statTile(R.drawable.ic_st_chart, "Net/KM", Fmt.d2(avg)))
         return c
     }
 
-    private fun stat(label: String, value: String): LinearLayout {
+    private fun statTile(icon: Int, label: String, value: String): LinearLayout {
+        val t = LinearLayout(this)
+        t.gravity = Gravity.CENTER_VERTICAL
+        t.background = Ui.rounded(Ui.BG, dp(14).toFloat())
+        t.setPadding(dp(10), dp(10), dp(10), dp(10))
+        val ib = FrameLayout(this)
+        ib.background = Ui.rounded(Ui.SURFACE2, dp(10).toFloat())
+        val iv = ImageView(this); iv.setImageResource(icon); iv.setColorFilter(Ui.GREEN)
+        ib.addView(iv, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        t.addView(ib, LinearLayout.LayoutParams(dp(40), dp(40)))
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
-        col.addView(tv(label, 10f, Ui.MUTED))
-        col.addView(tv(value, 18f, Ui.TEXT, true))
-        return col
+        col.setPadding(dp(10), 0, 0, 0)
+        col.addView(tv(label, 12f, Ui.MUTED))
+        col.addView(tv(value, 17f, Ui.TEXT, true))
+        t.addView(col)
+        return t
+    }
+
+    private fun welcomeBanner(): FrameLayout {
+        val f = FrameLayout(this)
+        f.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat())
+        f.clipToOutline = true
+        val img = ImageView(this)
+        img.setImageResource(R.drawable.bg_car)
+        img.scaleType = ImageView.ScaleType.CENTER_CROP
+        f.addView(img, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val shade = View(this)
+        shade.background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Color.parseColor("#F006120C"), Color.parseColor("#B006120C"), Color.TRANSPARENT))
+        f.addView(shade, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(18), dp(18), dp(18), dp(18))
+        col.gravity = Gravity.CENTER_VERTICAL
+        val nm = Cloud.name(this).ifEmpty { Cloud.email(this).substringBefore('@') }.ifEmpty { "șofer" }
+        col.addView(tv("Bun venit,", 16f, Ui.MUTED))
+        col.addView(tv(nm, 28f, Ui.TEXT, true))
+        val sub = tv("Condu inteligent.\nCâștigă mai mult.", 14f, Ui.TEXT)
+        sub.setPadding(0, dp(8), 0, 0)
+        col.addView(sub)
+        f.addView(col, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(170))
+        lp.bottomMargin = dp(12)
+        f.layoutParams = lp
+        return f
+    }
+
+    private fun quickActions(): LinearLayout {
+        val r = LinearLayout(this)
+        val lpR = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lpR.bottomMargin = dp(12)
+        r.layoutParams = lpR
+        fun q(icon: Int, label: String, go: () -> Unit) {
+            val t = LinearLayout(this)
+            t.orientation = LinearLayout.VERTICAL
+            t.gravity = Gravity.CENTER
+            t.setPadding(dp(4), dp(14), dp(4), dp(14))
+            t.background = Ui.rounded(Ui.SURFACE, dp(16).toFloat())
+            val iv = ImageView(this); iv.setImageResource(icon); iv.setColorFilter(Ui.GREEN)
+            t.addView(iv, LinearLayout.LayoutParams(dp(26), dp(26)))
+            val l = tv(label, 12f, Ui.TEXT, true); l.gravity = Gravity.CENTER; l.setPadding(0, dp(6), 0, 0)
+            t.addView(l)
+            t.setOnClickListener { go() }
+            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(dp(4), 0, dp(4), 0)
+            r.addView(t, lp)
+        }
+        q(R.drawable.ic_nav_zone, "Analizează zonele") { tab = 1; render() }
+        q(R.drawable.ic_nav_docs, "Gestionează actele") { tab = 3; render() }
+        q(R.drawable.ic_nav_gear, "Setări") { tab = 2; render() }
+        return r
     }
 
 
