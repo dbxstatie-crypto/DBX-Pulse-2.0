@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -48,6 +49,7 @@ class OverlayCard(private val ctx: Context) {
 
     private val verdict = TextView(ctx)
     private val tag = TextView(ctx)
+    private val payIcon = ImageView(ctx)
     private val big = TextView(ctx)
     private val unit = TextView(ctx)
     private val total = TextView(ctx)
@@ -88,6 +90,10 @@ class OverlayCard(private val ctx: Context) {
         tag.gravity = Gravity.END
         top.addView(verdict)
         top.addView(tag, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val iconLp = LinearLayout.LayoutParams(dp(48), dp(48))
+        iconLp.leftMargin = dp(8)
+        payIcon.setPadding(dp(8), dp(8), dp(8), dp(8))
+        top.addView(payIcon, iconLp)
         view.addView(top)
 
         val bigRow = LinearLayout(ctx)
@@ -123,17 +129,25 @@ class OverlayCard(private val ctx: Context) {
 
     fun bind(o: Offer, r: Result) {
         val color = Ui.levelColor(r.level)
-        view.background = Ui.rounded(Color.parseColor("#F2111827"), dp(22).toFloat(), color, dp(2))
+        // chenarul și iconița arată metoda de plată: verde = card, galben = numerar
+        val cash = o.pay == Pay.CASH
+        val payColor = if (cash) Ui.AMBER else Ui.GREEN
+        view.background = Ui.rounded(Color.parseColor("#F2111827"), dp(22).toFloat(), payColor, dp(2))
+        payIcon.setImageResource(if (cash) R.drawable.ic_pay_cash else R.drawable.ic_pay_card)
+        payIcon.background = Ui.rounded(Color.parseColor("#0B1A12"), dp(14).toFloat(), payColor, dp(2))
 
         verdict.text = Ui.levelLabel(r.level)
         verdict.setTextColor(Ui.BG)
         verdict.background = Ui.rounded(color, dp(14).toFloat())
 
-        tag.text = when {
+        val extra = when {
             r.short -> "cursă scurtă · bună oricum"
             o.pickupKnown && o.pickupKm > o.tripKm -> "drum lung până la pasager"
             else -> ""
         }
+        tag.text = if (cash) "NUMERAR" + (if (extra.isEmpty()) "" else "  ·  $extra") else extra
+        tag.setTextColor(if (cash) Ui.AMBER else Ui.MUTED)
+        tag.typeface = if (cash) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
 
         big.text = Fmt.d2(r.netPerKm)
         big.setTextColor(color)

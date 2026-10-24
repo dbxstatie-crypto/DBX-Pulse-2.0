@@ -242,16 +242,14 @@ object Cloud {
     private fun pending(c: Context, since: Long): List<JSONObject> {
         val out = ArrayList<JSONObject>()
         val nul = JSONObject.NULL
-        for (e in Store.geoEvents(c)) {
-            if (e.kind != 0 || e.ts <= since) continue
-            out.add(
-                JSONObject().put("ts", e.ts).put("kind", 0).put("lat", e.lat).put("lon", e.lon)
-                    .put("net_per_km", if (e.netPerKm.isNaN()) nul else e.netPerKm)
-                    .put("price", nul).put("pickup_km", nul).put("trip_km", nul).put("net", nul)
-            )
-        }
-        for (r in Store.history(c)) {
-            if (r.ts <= since || r.lat.isNaN() || r.lon.isNaN()) continue
+        // trimitem doar cursele luate (locul de preluare); ofertele văzute nu mai contează pentru zone
+        val nowMs = System.currentTimeMillis()
+        val all = Store.history(c)
+        // nu trimitem nimic mai nou decât prima cursă care încă așteaptă locația de la pasager
+        val limit = all.filter { !Store.pickupReady(it, nowMs) && nowMs - it.ts < Store.PICKUP_WAIT_MS }
+            .minOfOrNull { it.ts } ?: Long.MAX_VALUE
+        for (r in all) {
+            if (r.ts <= since || r.ts >= limit || !Store.pickupReady(r, nowMs)) continue
             out.add(
                 JSONObject().put("ts", r.ts).put("kind", 1).put("lat", r.lat).put("lon", r.lon)
                     .put("net_per_km", r.netPerKm).put("price", r.price)
@@ -301,7 +299,8 @@ object Cloud {
                 val o = a.getJSONObject(k)
                 lines.add(
                     o.getDouble("clat").toString() + "," + o.getDouble("clon") + "," + o.getInt("hr") + "," +
-                        o.getInt("kind") + "," + o.getInt("n") + "," + o.optDouble("avg_npk", Double.NaN)
+                        o.getInt("kind") + "," + o.getInt("n") + "," + o.optDouble("avg_npk", Double.NaN) + "," +
+                        o.optInt("dow", -1)
                 )
             }
             if (a.length() < PAGE) break
@@ -318,6 +317,7 @@ object Cloud {
         val s = Store.raw(c, "community") ?: return emptyList()
         if (s.isEmpty()) return emptyList()
         val cal = Calendar.getInstance()
+        val base = System.currentTimeMillis()
         val out = ArrayList<GeoEvent>()
         for (line in s.split("\n")) {
             val p = line.split(",")
@@ -327,10 +327,14 @@ object Cloud {
             val hr = p[2].toIntOrNull() ?: continue
             val kind = p[3].toIntOrNull() ?: continue
             val n = p[4].toIntOrNull() ?: continue
+            if (kind != 1) continue   // zonele comunității = doar curse luate, nu oferte văzute
             val avg = p[5].toDoubleOrNull() ?: Double.NaN
+            val dow = p.getOrNull(6)?.toIntOrNull() ?: -1   // 1 = luni ... 7 = duminică (ISO), -1 = necunoscut
+            cal.timeInMillis = base
+            if (dow in 1..7) cal.set(Calendar.DAY_OF_WEEK, if (dow == 7) Calendar.SUNDAY else dow + 1)
             cal.set(Calendar.HOUR_OF_DAY, hr)
             cal.set(Calendar.MINUTE, 30)
-            out.add(GeoEvent(cal.timeInMillis, lat, lon, kind, avg, n))
+            out.add(GeoEvent(cal.timeInMillis, lat, lon, kind, avg, n, dow in 1..7))
         }
         return out
     }

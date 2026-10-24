@@ -2,6 +2,10 @@ package ro.drivescore
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.PixelFormat
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -12,8 +16,9 @@ import android.widget.Toast
 
 /**
  * Citește ecranul Bolt Driver, calculează câștigul net / km și arată cardul.
- * Cardul dispare când oferta dispare, când ieși din Bolt sau când accepți cursa
- * (cursa acceptată intră în istoric).
+ *  - cardul NU primește atingeri: butoanele Bolt (Respinge / Acceptă) rămân apăsabile
+ *  - cursele card (acceptate automat) se salvează singure și cardul rămâne vizibil câteva secunde
+ *  - cât timp tura e pornită, se numără kilometrii (GPS) pentru „km în gol”
  */
 class OfferService : AccessibilityService() {
 
@@ -21,7 +26,11 @@ class OfferService : AccessibilityService() {
         private val PACKAGES = setOf("ee.mtakso.driver")
         private const val MISS_GRACE_MS = 1500L
         private const val ACTIVE_RIDE_WINDOW_MS = 8000L
-        private const val DEDUP_MS = 30000L
+        private const val OFFER_DEDUP_MS = 30000L
+        private const val RIDE_DEDUP_MS = 10 * 60 * 1000L   // aceeași cursă nu se salvează de două ori
+        private const val AUTO_HOLD_MS = 7000L              // cât rămâne cardul la cursele acceptate automat
+        private const val AUTO_LOG_DELAY_MS = 2500L         // timp să poți respinge înainte de salvare
+        private const val SHIFT_IDLE_MS = 60 * 60 * 1000L   // tura se oprește după 1h fără activitate în Bolt
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -45,9 +54,37 @@ class OfferService : AccessibilityService() {
     private var lastOfferKey: String? = null
     private var lastOfferAt = 0L
 
+    // cursă card acceptată automat
+    private var autoOffer: Offer? = null
+    private var autoResult: Result? = null
+    private var autoKey: String? = null
+    private var autoKeyAt = 0L
+    private var holdUntil = 0L
+
+    // cursa salvată care așteaptă locația de la pasager
+    private var awaitTs = 0L
+    private var awaitUntil = 0L
+
+    // oferta respinsă de tine
+    private var declinedKey: String? = null
+    private var declinedAt = 0L
+
+    // km în tură
+    private var tracking = false
+    private var lm: LocationManager? = null
+    private var lastLoc: Location? = null
+
     private val hideRunnable = Runnable {
         missScheduled = false
         offerGone()
+    }
+
+    private val autoLogRunnable = Runnable {
+        val o = autoOffer
+        val r = autoResult
+        autoOffer = null
+        autoResult = null
+        if (o != null) logRide(o, r)
     }
 
     private val ticker = object : Runnable {
@@ -63,16 +100,37 @@ class OfferService : AccessibilityService() {
         }
     }
 
+    private val trackCheck = object : Runnable {
+        override fun run() {
+            Odometer.checkIdle(this@OfferService, SHIFT_IDLE_MS)
+            syncTracking()
+            handler.postDelayed(this, 120_000L)
+        }
+    }
+
+    private val locListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            onLoc(location)
+        }
+
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+    }
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        handler.removeCallbacks(trackCheck)
+        handler.post(trackCheck)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
+        if (pkg != null && PACKAGES.contains(pkg)) Odometer.touch(this)
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && pkg != null && PACKAGES.contains(pkg)) {
             val t = ArrayList<String>()
             event.text?.forEach { t.add(it.toString()) }
@@ -80,6 +138,8 @@ class OfferService : AccessibilityService() {
             val src = event.source
             if (src != null) walk(src, t, 38) // doar butonul apăsat și 2 nivele sub el
             if (OfferParser.hasAccept(t)) acceptNow()
+            else if (OfferParser.hasReject(t)) declineNow()
+            else if (awaitTs != 0L && OfferParser.hasArrival(t)) confirmPickup()
         }
         queueScan()
     }
@@ -90,6 +150,7 @@ class OfferService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        stopTracking()
         hideCard()
         super.onDestroy()
     }
@@ -101,6 +162,46 @@ class OfferService : AccessibilityService() {
             scanQueued = false
             scan()
         }, 250)
+    }
+
+    // ---------- km în tură (GPS) ----------
+    private fun syncTracking() {
+        val want = Odometer.on(this) && Geo.hasPermission(this)
+        if (want && !tracking) startTracking() else if (!want && tracking) stopTracking()
+    }
+
+    @Suppress("MissingPermission")
+    private fun startTracking() {
+        try {
+            lm = getSystemService(LOCATION_SERVICE) as? LocationManager
+            lm?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 4000L, 5f, locListener, Looper.getMainLooper())
+            lastLoc = null
+            tracking = lm != null
+        } catch (e: Exception) {
+            tracking = false
+        }
+    }
+
+    private fun stopTracking() {
+        try {
+            lm?.removeUpdates(locListener)
+        } catch (e: Exception) {
+            // deja oprit
+        }
+        tracking = false
+        lastLoc = null
+    }
+
+    private fun onLoc(l: Location) {
+        if (l.hasAccuracy() && l.accuracy > 50f) return
+        val p = lastLoc
+        lastLoc = l
+        if (p == null) return
+        val dt = (l.time - p.time) / 1000.0
+        val d = p.distanceTo(l).toDouble()
+        if (dt <= 0.0 || d < 4.0 || d > 3000.0) return
+        if (d / dt > 60.0) return   // salt GPS (peste ~215 km/h)
+        Odometer.add(this, d / 1000.0)
     }
 
     // ---------- citire ecran ----------
@@ -153,6 +254,8 @@ class OfferService : AccessibilityService() {
             showOrUpdate(o)
             saveDump(texts)
         } else {
+            // păstrăm și ecranele cu prețuri pe care nu le-am recunoscut, pentru diagnostic
+            if (texts.any { it.contains("lei", true) }) saveDump(texts)
             onMiss(texts)
         }
     }
@@ -178,31 +281,50 @@ class OfferService : AccessibilityService() {
         }
         if (shown && !missScheduled) {
             missScheduled = true
-            handler.postDelayed(hideRunnable, MISS_GRACE_MS)
+            // la cursele acceptate automat cardul rămâne până apuci să vezi prețul
+            val wait = maxOf(MISS_GRACE_MS, holdUntil - System.currentTimeMillis())
+            handler.postDelayed(hideRunnable, wait)
         }
     }
 
     // ---------- card ----------
     private fun showOrUpdate(o: Offer) {
+        val nowMs = System.currentTimeMillis()
+        val okey = o.key()
+        // oferta pe care ai respins-o nu mai reapare cât se închide ecranul
+        if (okey == declinedKey && nowMs - declinedAt < 20000L) return
+
         val r = Scorer.score(o, Store.config(this))
         offer = o
         result = r
-        // notăm de unde vine oferta (o singură dată pe ofertă) — pentru harta de zone
-        val okey = o.key()
-        val nowMs = System.currentTimeMillis()
-        if (okey != lastOfferKey || nowMs - lastOfferAt > DEDUP_MS) {
+
+        // o ofertă văzută = ești online: pornesc tura singură
+        if (!Odometer.on(this)) {
+            Odometer.setOn(this, true)
+            syncTracking()
+        }
+
+        // notăm de unde vine oferta (o singură dată pe ofertă) — doar local
+        if (okey != lastOfferKey || nowMs - lastOfferAt > OFFER_DEDUP_MS) {
             Geo.last(this)?.let { Store.addOffer(this, it.first, it.second, r.netPerKm) }
             lastOfferKey = okey
             lastOfferAt = nowMs
         }
+
+        // cursă card: Bolt o acceptă automat, deci o salvăm și ținem cardul vizibil
+        if (o.pay == Pay.CARD && Store.autoCard(this) && (okey != autoKey || nowMs - autoKeyAt > OFFER_DEDUP_MS)) {
+            autoKey = okey
+            autoKeyAt = nowMs
+            autoOffer = o
+            autoResult = r
+            holdUntil = nowMs + AUTO_HOLD_MS
+            handler.removeCallbacks(autoLogRunnable)
+            handler.postDelayed(autoLogRunnable, AUTO_LOG_DELAY_MS)
+        }
+
         var c = card
         if (c == null) {
             c = OverlayCard(this)
-            c.view.setOnLongClickListener {
-                // plasă de siguranță manuală: apăsare lungă = salvează în istoric
-                acceptNow()
-                true
-            }
             card = c
         }
         c.bind(o, r)
@@ -211,13 +333,20 @@ class OfferService : AccessibilityService() {
                 resources.displayMetrics.widthPixels - dp(24),
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                // NOT_TOUCHABLE: atingerile trec prin card către Bolt, ca să poți apăsa Respinge / Acceptă
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
             )
-            lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            lp.y = dp(44)
+            if (Store.cardOnBottom(this)) {
+                lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                lp.y = dp(24)
+            } else {
+                lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                lp.y = dp(44)
+            }
             try {
                 wm?.addView(c.view, lp)
                 shown = true
@@ -268,13 +397,48 @@ class OfferService : AccessibilityService() {
         pendingResult = null
     }
 
+    /** Ai apăsat „Respinge": cardul dispare și cursa NU se salvează. */
+    private fun declineNow() {
+        handler.removeCallbacks(autoLogRunnable)
+        handler.removeCallbacks(hideRunnable)
+        autoOffer = null
+        autoResult = null
+        missScheduled = false
+        holdUntil = 0L
+        declinedKey = (offer ?: pendingOffer)?.key() ?: lastOfferKey
+        declinedAt = System.currentTimeMillis()
+        hideCard()
+        offer = null
+        result = null
+        pendingOffer = null
+        pendingResult = null
+    }
+
+    /** Ai apăsat „Am ajuns” / „Începe cursa”: ești la pasager, deci aici e locul de preluare. */
+    private fun confirmPickup() {
+        val ts = awaitTs
+        awaitTs = 0L
+        if (ts == 0L || System.currentTimeMillis() > awaitUntil) return
+        val loc = Geo.last(this) ?: return
+        Store.setRidePickup(this, ts, loc.first, loc.second)
+        Cloud.syncAsync(this, true)
+    }
+
     private fun logRide(o: Offer, r0: Result?) {
         val now = System.currentTimeMillis()
         val key = o.key()
-        if (key == loggedKey && now - loggedAt < DEDUP_MS) return
+        if (key == declinedKey && now - declinedAt < 20000L) return
+        if (key == loggedKey && now - loggedAt < RIDE_DEDUP_MS) return
         val r = r0 ?: Scorer.score(o, Store.config(this))
         val loc = Geo.last(this)
-        Store.addRide(this, o, r, loc?.first, loc?.second)
+        val ts = Store.addRide(this, o, r, loc?.first, loc?.second)
+        if (loc != null && o.pickupKnown && o.pickupKm < 0.3) {
+            // pasagerul e lângă tine: locația de acum e deja cea de preluare
+            Store.setRidePickup(this, ts, loc.first, loc.second)
+        } else {
+            awaitTs = ts
+            awaitUntil = now + Store.PICKUP_WAIT_MS
+        }
         Cloud.syncAsync(this)
         loggedKey = key
         loggedAt = now

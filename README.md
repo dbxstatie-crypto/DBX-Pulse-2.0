@@ -14,6 +14,17 @@ apoi la *Actions → Build APK → Run workflow*. După ~3 min descarci `DBX-Pul
    (Android 13+: Setări → Aplicații → DBX Pulse → ⋮ → „Permite setări restricționate”, apoi activezi.)
 3. Din tabul Setări pui comisionul, consumul, prețul combustibilului etc. Simulatorul arată cardul live.
 
+## Nou în 2.5
+- **Cash / card pe card**: chenar verde + iconiță card = card; chenar galben + iconiță monedă + „NUMERAR” = numerar (în Bolt, la card nu apare nimic, la numerar apare „Numerar”).
+- **Card = acceptat automat**: cursa se salvează singură după ~2,5 s (dacă nu o respingi) și cardul rămâne ~7 s pe ecran. Se poate opri din Setări.
+- **Respingere**: cardul nu mai primește atingeri, deci butoanele Bolt merg normal. Dacă respingi, cursa nu se salvează. Poziția cardului (sus/jos) se schimbă din Setări.
+- **Km în gol**: tab Istoric → „Tură”. Cât e pornită tura se numără kilometrii (GPS); km în gol = km în tură − km ai curselor. Tura pornește singură când apare o ofertă și se oprește după 1 h fără activitate în Bolt.
+- **Zone**: doar locurile de unde se preiau curse (tu + toți utilizatorii); ofertele văzute nu mai intră în zone și nu se mai trimit în cloud. Locul de preluare = unde ești când apeși „Am ajuns” / „Începe cursa” (dacă pasagerul e la <300 m, locul acceptării). Dacă nu apeși nimic în 45 min, se folosește locul acceptării.
+
+- **Cheltuieli** (Acasă → Cheltuieli): alimentări (lei, litri, km de pe bord) și alte cheltuieli. Calculează consumul real și prețul mediu și le poți aplica în Setări cu un buton. Consumul presupune plin la plin.
+- **Când merită** (tab Zone): ore bune (grafic pe 24 de ore) și zile bune pentru cea mai bună zonă sau pentru cercul atins pe hartă. Pentru zilele celorlalți șoferi rulează o dată `supabase/update_zile_saptamana.sql` în Supabase; fără el, zilele vin doar din cursele tale.
+- Reparat: funcția `stat()` din ecranul de zone lipsea din sursă.
+
 ## Nou în 2.2
 - Tab **Zone**: card „Cea mai bună zonă acum” + alte opțiuni, scor normalizat la 100.
 - Hartă OpenStreetMap întunecată cu zone **rotunde**; cele fierbinți pulsează (mai repede = mai multă cerere).

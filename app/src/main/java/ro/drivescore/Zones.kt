@@ -14,7 +14,8 @@ data class GeoEvent(
     val lon: Double,
     val kind: Int,
     val netPerKm: Double,
-    val weight: Int = 1
+    val weight: Int = 1,
+    val dowKnown: Boolean = true   // false = ziua săptămânii nu e cunoscută (date vechi de pe server)
 )
 
 /** O zonă (celulă ~1 km) cu scorul ei. */
@@ -28,8 +29,8 @@ data class Zone(
 )
 
 object Zones {
-    const val CELL_DEG = 0.01            // ~1.1 km pe latitudine
-    private const val MIN_TIME_EVENTS = 10
+    const val CELL_DEG = 0.005           // ~550 m, aliniat cu rotunjirea de pe server
+    private const val MIN_TIME_EVENTS = 6
 
     class Analysis(
         val zones: List<Zone>,
@@ -64,11 +65,11 @@ object Zones {
         val useTime = near.sumOf { it.weight } >= MIN_TIME_EVENTS
         val ev: List<GeoEvent> = if (useTime) near else all
 
-        val lonStep = CELL_DEG / max(cos(Math.toRadians(cLat)), 0.2)
+        val lonStep = CELL_DEG   // aceeași grilă ca pe server (0,005° și pe longitudine)
         val cells = HashMap<String, Acc>()
         for (e in ev) {
-            val i = Math.floor(e.lat / CELL_DEG).toInt()
-            val j = Math.floor(e.lon / lonStep).toInt()
+            val i = Math.round(e.lat / CELL_DEG).toInt()
+            val j = Math.round(e.lon / lonStep).toInt()
             val a = cells.getOrPut("$i:$j") { Acc() }
             if (e.kind == 1) a.r += e.weight else a.o += e.weight
             if (!e.netPerKm.isNaN()) { a.nsum += e.netPerKm * e.weight; a.ln += e.weight }
@@ -80,7 +81,7 @@ object Zones {
             val j = p[1].toInt()
             zones.add(
                 Zone(
-                    (i + 0.5) * CELL_DEG, (j + 0.5) * lonStep,
+                    i * CELL_DEG, j * lonStep,
                     a.o + 3.0 * a.r, a.o, a.r,
                     if (a.ln > 0) a.nsum / a.ln else 0.0
                 )
@@ -88,6 +89,30 @@ object Zones {
         }
         zones.sortByDescending { it.score }
         return Analysis(zones, cLat, cLon, useTime, lonStep)
+    }
+
+    /** Când se preiau curse într-o zonă: pe ore (0-23) și pe zile (0 = luni ... 6 = duminică). */
+    class Timing(val hours: IntArray, val days: IntArray, val total: Int, val daysTotal: Int)
+
+    fun timing(all: List<GeoEvent>, z: Zone): Timing {
+        val zi = Math.round(z.lat / CELL_DEG)
+        val zj = Math.round(z.lon / CELL_DEG)
+        val hours = IntArray(24)
+        val days = IntArray(7)
+        var total = 0
+        var daysTotal = 0
+        val cal = Calendar.getInstance()
+        for (e in all) {
+            if (Math.round(e.lat / CELL_DEG) != zi || Math.round(e.lon / CELL_DEG) != zj) continue
+            cal.timeInMillis = e.ts
+            hours[cal.get(Calendar.HOUR_OF_DAY)] += e.weight
+            total += e.weight
+            if (e.dowKnown) {
+                days[(cal.get(Calendar.DAY_OF_WEEK) + 5) % 7] += e.weight
+                daysTotal += e.weight
+            }
+        }
+        return Timing(hours, days, total, daysTotal)
     }
 
     /** Nume scurt pentru zonă: „Centru” sau direcția față de centrul datelor. */

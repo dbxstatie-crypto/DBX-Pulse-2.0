@@ -15,7 +15,9 @@ data class Ride(
     val netPerKm: Double,
     val level: Level,
     val lat: Double = Double.NaN,
-    val lon: Double = Double.NaN
+    val lon: Double = Double.NaN,
+    val pay: Int = -1,         // -1 necunoscut, 0 card, 1 numerar
+    val pu: Boolean = false    // true = locația e cea de la pasager (nu de la acceptare)
 ) {
     val totalKm: Double get() = pickupKm + tripKm
 }
@@ -27,6 +29,8 @@ object Store {
     private const val K_OFFERS = "offers"
     private const val MAX_HISTORY = 1000
     private const val MAX_OFFERS = 4000
+    /** Cât așteptăm locația de la pasager; după aceea folosim locul acceptării. */
+    const val PICKUP_WAIT_MS = 45 * 60 * 1000L
 
     private fun prefs(c: Context): SharedPreferences =
         c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -36,6 +40,18 @@ object Store {
 
     fun setRaw(c: Context, key: String, value: String) {
         prefs(c).edit().putString(key, value).apply()
+    }
+
+    fun autoCard(c: Context): Boolean = raw(c, "auto_card") != "0"
+    fun cardOnBottom(c: Context): Boolean = raw(c, "card_pos") == "bottom"
+
+    /** Valorile numerice ale cheilor care încep cu prefixul (ex. kilometrii pe zile). */
+    fun sumPrefix(c: Context, prefix: String): Double {
+        var t = 0.0
+        for ((k, v) in prefs(c).all) {
+            if (k.startsWith(prefix)) t += (v as? String)?.toDoubleOrNull() ?: 0.0
+        }
+        return t
     }
 
     fun config(c: Context): Config {
@@ -69,7 +85,9 @@ object Store {
                         o.getDouble("net"), o.getDouble("npk"),
                         Level.values()[o.getInt("lv").coerceIn(0, 2)],
                         if (o.has("la")) o.getDouble("la") else Double.NaN,
-                        if (o.has("lo")) o.getDouble("lo") else Double.NaN
+                        if (o.has("lo")) o.getDouble("lo") else Double.NaN,
+                        o.optInt("py", -1),
+                        o.optBoolean("pu", false)
                     )
                 )
             }
@@ -85,7 +103,7 @@ object Store {
             arr.put(
                 JSONObject()
                     .put("ts", r.ts).put("price", r.price).put("pk", r.pickupKm).put("tk", r.tripKm)
-                    .put("net", r.net).put("npk", r.netPerKm).put("lv", r.level.ordinal)
+                    .put("net", r.net).put("npk", r.netPerKm).put("lv", r.level.ordinal).put("py", r.pay).put("pu", r.pu)
                     .also { j ->
                         if (!r.lat.isNaN() && !r.lon.isNaN()) j.put("la", r.lat).put("lo", r.lon)
                     }
@@ -94,17 +112,29 @@ object Store {
         prefs(c).edit().putString(K_HISTORY, arr.toString()).apply()
     }
 
-    fun addRide(c: Context, o: Offer, r: Result, lat: Double? = null, lon: Double? = null) {
+    /** Salvează cursa și întoarce ts-ul ei. */
+    fun addRide(c: Context, o: Offer, r: Result, lat: Double? = null, lon: Double? = null): Long {
+        val ts = System.currentTimeMillis()
         val list = ArrayList<Ride>()
         list.add(
             Ride(
-                System.currentTimeMillis(), o.price, o.pickupKm, o.tripKm, r.net, r.netPerKm, r.level,
-                lat ?: Double.NaN, lon ?: Double.NaN
+                ts, o.price, o.pickupKm, o.tripKm, r.net, r.netPerKm, r.level,
+                lat ?: Double.NaN, lon ?: Double.NaN, o.pay.ordinal
             )
         )
         list.addAll(history(c))
         save(c, list)
+        return ts
     }
+
+    /** Pune locația de la pasager pe cursa cu ts-ul dat. */
+    fun setRidePickup(c: Context, ts: Long, lat: Double, lon: Double) {
+        save(c, history(c).map { if (it.ts == ts) it.copy(lat = lat, lon = lon, pu = true) else it })
+    }
+
+    /** Cursă cu locația de preluare gata de folosit (confirmată sau suficient de veche). */
+    fun pickupReady(r: Ride, now: Long): Boolean =
+        !r.lat.isNaN() && !r.lon.isNaN() && (r.pu || now - r.ts >= PICKUP_WAIT_MS)
 
     fun deleteRide(c: Context, ts: Long) {
         save(c, history(c).filter { it.ts != ts })
@@ -144,8 +174,9 @@ object Store {
                 out.add(GeoEvent(ts, la, lo, 0, npk))
             }
         }
+        val nowMs = System.currentTimeMillis()
         for (r in history(c)) {
-            if (r.lat.isNaN() || r.lon.isNaN()) continue
+            if (!pickupReady(r, nowMs)) continue
             out.add(GeoEvent(r.ts, r.lat, r.lon, 1, r.netPerKm))
         }
         return out
