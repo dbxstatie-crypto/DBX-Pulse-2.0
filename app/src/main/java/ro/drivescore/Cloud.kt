@@ -20,6 +20,8 @@ import java.util.concurrent.Executors
  *  - se trimit ofertele/cursele cu locație; se descarcă zonele agregate ale celorlalți
  */
 object Cloud {
+    /** false = oricine își face cont și intră direct; true = doar cu cod de invitație (vezi update_invitatii.sql). */
+    const val REQUIRE_INVITE = true
     const val BASE_URL = "https://odbwfbjznpwvqygcxfqq.supabase.co"
     const val PUBLISHABLE_KEY = "sb_publishable_KSP4DRasJwVdiisAQJBd_Q_CvCO8khc"   // sb_publishable_... (cheia publică)
 
@@ -139,36 +141,141 @@ object Cloud {
     private fun restoreMembership(c: Context) {
         val tok = token(c) ?: return
         val uid = Store.raw(c, "cloud_uid") ?: return
-        val r = call("GET", "/rest/v1/members?select=name,role&user_id=eq.$uid", null, tok)
+        val r = call("GET", "/rest/v1/members?select=name,role,unlimited,access_until&user_id=eq.$uid", null, tok)
         if (r.code !in 200..299) return
         val a = JSONArray(r.body)
         if (a.length() > 0) {
+            val o = a.getJSONObject(0)
             Store.setRaw(c, "cloud_member", "1")
-            Store.setRaw(c, "cloud_name", a.getJSONObject(0).optString("name", ""))
-            Store.setRaw(c, "cloud_role", a.getJSONObject(0).optString("role", "member"))
+            Store.setRaw(c, "cloud_name", o.optString("name", ""))
+            Store.setRaw(c, "cloud_role", o.optString("role", "member"))
+            Store.setRaw(c, "cloud_unl", if (o.optBoolean("unlimited", false)) "1" else "0")
+            var until = 0L
+            if (!o.isNull("access_until")) {
+                try { until = java.time.OffsetDateTime.parse(o.getString("access_until")).toInstant().toEpochMilli() } catch (e: Exception) { }
+            }
+            Store.setRaw(c, "cloud_until", until.toString())
         } else {
             Store.setRaw(c, "cloud_member", "")
-            // fără cod de invitație: intri automat în comunitate, cu numele din email
+            // cont nou cu cod de invitație dat la înregistrare
+            val code = (Store.raw(c, "pending_code") ?: "").trim()
             val nick = (Store.raw(c, "pending_nick") ?: "").trim()
+            Store.setRaw(c, "pending_code", "")
             Store.setRaw(c, "pending_nick", "")
-            val nm = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
-            val jr = call("POST", "/rest/v1/rpc/join_community", JSONObject().put("p_name", nm).toString(), tok)
-            if (jr.code in 200..299) {
-                Store.setRaw(c, "cloud_member", "1")
-                Store.setRaw(c, "cloud_name", nm)
-                Store.setRaw(c, "cloud_role", jr.body.trim().trim('"'))
+            if (!REQUIRE_INVITE) {
+                val nm0 = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
+                val jr0 = call("POST", "/rest/v1/rpc/join_community", JSONObject().put("p_name", nm0).toString(), tok)
+                if (jr0.code in 200..299) restoreMembership(c)
+            } else if (code.isNotEmpty()) {
+                val nm = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
+                val jr = call("POST", "/rest/v1/rpc/redeem_invite", JSONObject().put("p_code", code).put("p_name", nm).toString(), tok)
+                if (jr.code in 200..299) restoreMembership(c)
+                else Store.setRaw(c, "join_error", if (jr.body.contains("invalid invite")) "Cod invalid sau deja folosit." else "Eroare ${jr.code}.")
             }
+        }
+    }
+
+    /** Are acces: admin, nelimitat sau neexpirat. Dacă încă nu știm (versiune veche), nu blocăm. */
+    fun hasAccess(c: Context): Boolean {
+        if (!REQUIRE_INVITE) return true
+        if (role(c) == "admin") return true
+        val unl = Store.raw(c, "cloud_unl")
+        if (unl == null || unl.isEmpty() || unl == "1") return true
+        val until = Store.raw(c, "cloud_until")?.toLongOrNull() ?: 0L
+        return until > System.currentTimeMillis()
+    }
+
+    /** Reîmprospătează accesul (cel mult o dată la 10 minute). */
+    fun refreshAccess(c: Context) {
+        Store.setRaw(c, "mem_check_ts", System.currentTimeMillis().toString())
+        try { restoreMembership(c) } catch (e: Exception) { }
+    }
+
+    fun refreshAccessAsync(ctx: Context, force: Boolean, done: () -> Unit) {
+        val c = ctx.applicationContext
+        val last = Store.raw(c, "mem_check_ts")?.toLongOrNull() ?: 0L
+        if (!force && System.currentTimeMillis() - last < 10 * 60000L) return
+        if (token(c) == null) return
+        exec.execute { refreshAccess(c); main.post { done() } }
+    }
+
+    class PayReq(val userId: String, val name: String, val email: String, val ts: String)
+
+    fun accessUntil(c: Context): Long = Store.raw(c, "cloud_until")?.toLongOrNull() ?: 0L
+    fun isUnlimited(c: Context): Boolean {
+        if (role(c) == "admin") return true
+        val u = Store.raw(c, "cloud_unl")
+        return u == null || u.isEmpty() || u == "1"
+    }
+
+    private fun rpc(ctx: Context, fn: String, body: JSONObject, done: (String?, String) -> Unit) {
+        val c = ctx.applicationContext
+        exec.execute {
+            var res: String? = null
+            var msg: String
+            try {
+                val tok = token(c)
+                if (tok == null) msg = "Nu ești conectat."
+                else {
+                    val r = call("POST", "/rest/v1/rpc/$fn", body.toString(), tok)
+                    if (r.code in 200..299) { res = r.body; msg = "ok" } else msg = "Eroare ${r.code}."
+                }
+            } catch (e: Exception) { msg = "Fără internet." }
+            main.post { done(res, msg) }
+        }
+    }
+
+    /** Utilizatorul spune „Am plătit”: cererea ajunge la admin. */
+    fun requestPayment(ctx: Context, done: (Boolean, String) -> Unit) =
+        rpc(ctx, "request_payment", JSONObject()) { r, m -> done(r != null, m) }
+
+    /** Doar admin: cererile de plată în așteptare. */
+    fun listPayments(ctx: Context, done: (List<PayReq>?, String) -> Unit) =
+        rpc(ctx, "list_payment_requests", JSONObject()) { r, m ->
+            if (r == null) done(null, m)
+            else {
+                val out = ArrayList<PayReq>()
+                try {
+                    val a = JSONArray(r)
+                    for (i in 0 until a.length()) {
+                        val o = a.getJSONObject(i)
+                        out.add(PayReq(o.getString("user_id"), o.optString("name", ""), o.optString("email", ""), o.optString("created_at", "")))
+                    }
+                } catch (e: Exception) { }
+                done(out, "ok")
+            }
+        }
+
+    /** Doar admin: aprobă plata și prelungește accesul. */
+    fun approvePayment(ctx: Context, userId: String, days: Int, done: (Boolean, String) -> Unit) =
+        rpc(ctx, "approve_payment", JSONObject().put("p_user", userId).put("p_days", days)) { r, m -> done(r != null, m) }
+
+    /** Doar admin: creează un cod de invitație (o singură folosire). */
+    fun createInvite(ctx: Context, days: Int, unlimited: Boolean, done: (String?, String) -> Unit) {
+        val c = ctx.applicationContext
+        exec.execute {
+            var code: String? = null
+            var msg: String
+            try {
+                val tok = token(c)
+                if (tok == null) msg = "Nu ești conectat."
+                else {
+                    val r = call("POST", "/rest/v1/rpc/create_invite", JSONObject().put("p_days", days).put("p_unlimited", unlimited).toString(), tok)
+                    if (r.code in 200..299) { code = r.body.trim().trim('"'); msg = "ok" } else msg = "Eroare ${r.code}."
+                }
+            } catch (e: Exception) { msg = "Fără internet." }
+            main.post { done(code, msg) }
         }
     }
 
     /** Ieșire din cont pe acest telefon (datele din cloud rămân). */
     fun logout(c: Context) {
         for (k in listOf("cloud_access", "cloud_refresh", "cloud_exp", "cloud_email", "cloud_member", "cloud_name",
-            "cloud_role", "cloud_synced_ts", "community", "cloud_status")) Store.setRaw(c, k, "")
+            "cloud_role", "cloud_synced_ts", "community", "cloud_status", "cloud_unl", "cloud_until", "join_error")) Store.setRaw(c, k, "")
     }
 
     // ---------- intrare / ieșire ----------
-    fun join(ctx: Context, name: String, done: (Boolean, String) -> Unit) {
+    fun join(ctx: Context, name: String, code: String, done: (Boolean, String) -> Unit) {
         val c = ctx.applicationContext
         exec.execute {
             var ok = false
@@ -178,16 +285,17 @@ object Cloud {
                 if (tok == null) {
                     msg = "Nu ești conectat la cont. Intră mai întâi cu email și parolă."
                 } else {
-                    val body = JSONObject().put("p_name", name.trim()).toString()
-                    val r = call("POST", "/rest/v1/rpc/join_community", body, tok)
+                    val body = JSONObject().put("p_code", code.trim()).put("p_name", name.trim()).toString()
+                    val r = call("POST", "/rest/v1/rpc/redeem_invite", body, tok)
                     if (r.code in 200..299) {
                         Store.setRaw(c, "cloud_member", "1")
                         Store.setRaw(c, "cloud_name", name.trim())
                         Store.setRaw(c, "cloud_role", r.body.trim().trim('"'))
                         ok = true
                         msg = "Ai intrat în comunitate."
+                        refreshAccess(c)
                     } else {
-                        msg = "Eroare ${r.code}."
+                        msg = if (r.body.contains("invalid invite")) "Cod invalid sau deja folosit." else "Eroare ${r.code}."
                     }
                 }
             } catch (e: Exception) {
@@ -206,7 +314,7 @@ object Cloud {
                 val tok = token(c)
                 val r = if (tok != null) call("POST", "/rest/v1/rpc/delete_my_data", "{}", tok) else null
                 if (r != null && r.code in 200..299) {
-                    for (k in listOf("cloud_member", "cloud_name", "cloud_role", "cloud_synced_ts", "community", "cloud_status")) {
+                    for (k in listOf("cloud_member", "cloud_name", "cloud_role", "cloud_synced_ts", "community", "cloud_status", "cloud_unl", "cloud_until", "join_error")) {
                         Store.setRaw(c, k, "")
                     }
                     ok = true
@@ -242,14 +350,16 @@ object Cloud {
     private fun pending(c: Context, since: Long): List<JSONObject> {
         val out = ArrayList<JSONObject>()
         val nul = JSONObject.NULL
-        // trimitem doar cursele luate (locul de preluare); ofertele văzute nu mai contează pentru zone
-        val nowMs = System.currentTimeMillis()
-        val all = Store.history(c)
-        // nu trimitem nimic mai nou decât prima cursă care încă așteaptă locația de la pasager
-        val limit = all.filter { !Store.pickupReady(it, nowMs) && nowMs - it.ts < Store.PICKUP_WAIT_MS }
-            .minOfOrNull { it.ts } ?: Long.MAX_VALUE
-        for (r in all) {
-            if (r.ts <= since || r.ts >= limit || !Store.pickupReady(r, nowMs)) continue
+        for (e in Store.geoEvents(c)) {
+            if (e.kind != 0 || e.ts <= since) continue
+            out.add(
+                JSONObject().put("ts", e.ts).put("kind", 0).put("lat", e.lat).put("lon", e.lon)
+                    .put("net_per_km", if (e.netPerKm.isNaN()) nul else e.netPerKm)
+                    .put("price", nul).put("pickup_km", nul).put("trip_km", nul).put("net", nul)
+            )
+        }
+        for (r in Store.history(c)) {
+            if (r.ts <= since || r.lat.isNaN() || r.lon.isNaN()) continue
             out.add(
                 JSONObject().put("ts", r.ts).put("kind", 1).put("lat", r.lat).put("lon", r.lon)
                     .put("net_per_km", r.netPerKm).put("price", r.price)
@@ -299,8 +409,7 @@ object Cloud {
                 val o = a.getJSONObject(k)
                 lines.add(
                     o.getDouble("clat").toString() + "," + o.getDouble("clon") + "," + o.getInt("hr") + "," +
-                        o.getInt("kind") + "," + o.getInt("n") + "," + o.optDouble("avg_npk", Double.NaN) + "," +
-                        o.optInt("dow", -1)
+                        o.getInt("kind") + "," + o.getInt("n") + "," + o.optDouble("avg_npk", Double.NaN)
                 )
             }
             if (a.length() < PAGE) break
@@ -317,7 +426,6 @@ object Cloud {
         val s = Store.raw(c, "community") ?: return emptyList()
         if (s.isEmpty()) return emptyList()
         val cal = Calendar.getInstance()
-        val base = System.currentTimeMillis()
         val out = ArrayList<GeoEvent>()
         for (line in s.split("\n")) {
             val p = line.split(",")
@@ -327,14 +435,10 @@ object Cloud {
             val hr = p[2].toIntOrNull() ?: continue
             val kind = p[3].toIntOrNull() ?: continue
             val n = p[4].toIntOrNull() ?: continue
-            if (kind != 1) continue   // zonele comunității = doar curse luate, nu oferte văzute
             val avg = p[5].toDoubleOrNull() ?: Double.NaN
-            val dow = p.getOrNull(6)?.toIntOrNull() ?: -1   // 1 = luni ... 7 = duminică (ISO), -1 = necunoscut
-            cal.timeInMillis = base
-            if (dow in 1..7) cal.set(Calendar.DAY_OF_WEEK, if (dow == 7) Calendar.SUNDAY else dow + 1)
             cal.set(Calendar.HOUR_OF_DAY, hr)
             cal.set(Calendar.MINUTE, 30)
-            out.add(GeoEvent(cal.timeInMillis, lat, lon, kind, avg, n, dow in 1..7))
+            out.add(GeoEvent(cal.timeInMillis, lat, lon, kind, avg, n))
         }
         return out
     }

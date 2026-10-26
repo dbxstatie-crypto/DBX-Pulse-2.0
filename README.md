@@ -14,17 +14,6 @@ apoi la *Actions → Build APK → Run workflow*. După ~3 min descarci `DBX-Pul
    (Android 13+: Setări → Aplicații → DBX Pulse → ⋮ → „Permite setări restricționate”, apoi activezi.)
 3. Din tabul Setări pui comisionul, consumul, prețul combustibilului etc. Simulatorul arată cardul live.
 
-## Nou în 2.5
-- **Cash / card pe card**: chenar verde + iconiță card = card; chenar galben + iconiță monedă + „NUMERAR” = numerar (în Bolt, la card nu apare nimic, la numerar apare „Numerar”).
-- **Card = acceptat automat**: cursa se salvează singură după ~2,5 s (dacă nu o respingi) și cardul rămâne ~7 s pe ecran. Se poate opri din Setări.
-- **Respingere**: cardul nu mai primește atingeri, deci butoanele Bolt merg normal. Dacă respingi, cursa nu se salvează. Poziția cardului (sus/jos) se schimbă din Setări.
-- **Km în gol**: tab Istoric → „Tură”. Cât e pornită tura se numără kilometrii (GPS); km în gol = km în tură − km ai curselor. Tura pornește singură când apare o ofertă și se oprește după 1 h fără activitate în Bolt.
-- **Zone**: doar locurile de unde se preiau curse (tu + toți utilizatorii); ofertele văzute nu mai intră în zone și nu se mai trimit în cloud. Locul de preluare = unde ești când apeși „Am ajuns” / „Începe cursa” (dacă pasagerul e la <300 m, locul acceptării). Dacă nu apeși nimic în 45 min, se folosește locul acceptării.
-
-- **Cheltuieli** (Acasă → Cheltuieli): alimentări (lei, litri, km de pe bord) și alte cheltuieli. Calculează consumul real și prețul mediu și le poți aplica în Setări cu un buton. Consumul presupune plin la plin.
-- **Când merită** (tab Zone): ore bune (grafic pe 24 de ore) și zile bune pentru cea mai bună zonă sau pentru cercul atins pe hartă. Pentru zilele celorlalți șoferi rulează o dată `supabase/update_zile_saptamana.sql` în Supabase; fără el, zilele vin doar din cursele tale.
-- Reparat: funcția `stat()` din ecranul de zone lipsea din sursă.
-
 ## Nou în 2.2
 - Tab **Zone**: card „Cea mai bună zonă acum” + alte opțiuni, scor normalizat la 100.
 - Hartă OpenStreetMap întunecată cu zone **rotunde**; cele fierbinți pulsează (mai repede = mai multă cerere).
@@ -38,3 +27,10 @@ apoi la *Actions → Build APK → Run workflow*. După ~3 min descarci `DBX-Pul
 4. Build → instalezi → tab **Zone** → jos, „Cont și comunitate”: „Creez cont” cu email + parolă, apoi nume + cod de invitație. Tu folosești codul ADM-, prietenii codul PRI-.
 5. Cont nou pe alt telefon: „Intru în cont” cu același email/parolă — te recunoaște automat ca membru, fără cod nou.
 6. Admin: datele complete le vezi în Supabase → Table Editor → `events` (Export → CSV). Prietenii nu pot citi decât zonele agregate.
+
+## Nou în 2.5 — buton de actualizare
+- La pornire aplicația citește tabelul `app_release` (Supabase). Dacă `version_code` e mai mare decât cel instalat, apare cardul „Versiune nouă disponibilă”.
+- Setări → „Caută actualizări” verifică manual.
+- `min_version_code` mai mare decât al utilizatorului = actualizare obligatorie.
+- Pentru fiecare versiune nouă: crești `versionCode`/`versionName` în `app/build.gradle.kts`, construiești APK-ul, îl urci în Storage (bucket `apk`, fișier `dbx-pulse.apk`, Upsert) și rulezi în SQL Editor:
+  `update public.app_release set version_code = 8, version_name = '2.6', notes = 'Ce e nou' where id = 1;`

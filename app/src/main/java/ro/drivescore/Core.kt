@@ -22,9 +22,6 @@ data class Config(
     val costPerKm: Double get() = energyPerKm + maintPerKm + fixedPerKm
 }
 
-/** Metoda de plată: în Bolt, la card nu apare nimic, la numerar apare „Numerar”. */
-enum class Pay { CARD, CASH }
-
 /** O ofertă citită de pe ecranul aplicației de ride-hailing. */
 data class Offer(
     val price: Double,        // preț brut (lei)
@@ -33,8 +30,7 @@ data class Offer(
     val pickupMin: Int,
     val tripMin: Int,
     val pickupKnown: Boolean, // false dacă aplicația a arătat o singură distanță
-    val pay: Pay = Pay.CARD,
-    val buttons: Boolean = true // false = ecran fără Acceptă/Respinge (cursă acceptată automat)
+    val cash: Boolean = false // true dacă oferta arată „Numerar”; altfel e card
 ) {
     val totalKm: Double get() = pickupKm + tripKm
     val totalMin: Int get() = pickupMin + tripMin
@@ -79,34 +75,34 @@ object OfferParser {
     private val minRe = Regex(NB + """(\d{1,3})\s*min(?![\p{L}])""", RegexOption.IGNORE_CASE)
 
     /** Butoanele unei oferte: Acceptă / Respinge. Fără ele nu considerăm ecranul o ofertă. */
-    val acceptRe = Regex("""(?<![\p{L}])accept(?:ă|a)?(?![\p{L}])""", RegexOption.IGNORE_CASE)
+    val acceptRe = Regex("""(?<![\p{L}])(?:accept(?:ă|a)?|potrivire|potrive[sș]te)(?![\p{L}])""", RegexOption.IGNORE_CASE)
     val rejectRe = Regex("""(?<![\p{L}])(?:respinge|refuz[ăa]?|decline|reject|skip)(?![\p{L}])""", RegexOption.IGNORE_CASE)
-
-    private val cashRe = Regex("""(?<![\p{L}])(?:numerar|cash)(?![\p{L}])""", RegexOption.IGNORE_CASE)
 
     /** Semne că s-a trecut într-o cursă activă (folosit ca plasă de siguranță pentru „acceptat"). */
     val activeRideRe = Regex(
-        """anulează cursa|anuleaza cursa|cancel ride|cancel trip|ai ajuns|am ajuns|i['’]ve arrived|i have arrived""",
+        """anulează cursa|anuleaza cursa|cancel ride|cancel trip|ai ajuns|am ajuns|ajuns la pasager|începe cursa|incepe cursa|pornește cursa|navighează|navigheaza|ridică pasagerul|ridica pasagerul|drumul spre pasager|i['’]ve arrived|i have arrived|start trip|start ride|navigate|contactează pasagerul|contacteaza pasagerul|sună pasagerul|trimite mesaj""",
         RegexOption.IGNORE_CASE
     )
 
-    /** Butoane apăsate când ești la pasager: „Am ajuns”, „Începe cursa” etc. */
-    private val arrivalRe = Regex(
-        """am ajuns|ai ajuns|începe|incepe|pornește|porneste|i['’]ve arrived|i have arrived|start (?:ride|trip)|begin""",
-        RegexOption.IGNORE_CASE
-    )
-    fun hasArrival(texts: List<String>) = texts.any { arrivalRe.containsMatchIn(it) }
+    private val cashRe = Regex("""(?<![\p{L}])(?:numerar|cash)(?![\p{L}])""", RegexOption.IGNORE_CASE)
 
     private fun num(s: String) = s.replace(',', '.').toDoubleOrNull()
 
-    fun hasAccept(texts: List<String>) = texts.any { acceptRe.containsMatchIn(it) }
+    private val cancelRe = Regex("""pasagerul a anulat|pasager(ul)? a anulat|a anulat cursa|cursa (a fost )?anulat[ăa]|cursa ta a fost anulat[ăa]|anulat de pasager|passenger (has )?cancel|ride (was )?cancel|trip (was )?cancel""", RegexOption.IGNORE_CASE)
+    fun hasCancelled(texts: List<String>) = texts.any { cancelRe.containsMatchIn(it) }
+    private val cancelClickRe = Regex("""(?<![\p{L}])anulează(?![\p{L}])|(?<![\p{L}])anuleaza(?![\p{L}])|cancel (ride|trip)""", RegexOption.IGNORE_CASE)
+    fun hasCancelClick(texts: List<String>) = texts.any { cancelClickRe.containsMatchIn(it) }
+    // „Acceptare automată” (cursele cu card) și „Acceptă următoarea cursă” (cursă în cursă)
+    private val autoRe = Regex("""accept(?:are|at[ăa]|[ăa])?\s+automat[ăa]?|se accept[ăa] automat|auto-?accept|accepted automatically""", RegexOption.IGNORE_CASE)
+    private val nextRe = Regex("""urm[ăa]toarea curs[ăa]|next (ride|trip)""", RegexOption.IGNORE_CASE)
+    fun hasAuto(texts: List<String>) = texts.any { autoRe.containsMatchIn(it) }
+    fun hasNext(texts: List<String>) = texts.any { nextRe.containsMatchIn(it) }
     fun hasReject(texts: List<String>) = texts.any { rejectRe.containsMatchIn(it) }
+    fun hasAccept(texts: List<String>) = texts.any { acceptRe.containsMatchIn(it) }
     fun hasActiveRide(texts: List<String>) = texts.any { activeRideRe.containsMatchIn(it) }
 
     fun parse(texts: List<String>): Offer? {
-        val buttons = texts.any { acceptRe.containsMatchIn(it) || rejectRe.containsMatchIn(it) }
-        // fără butoane = cursă card acceptată automat; o citim doar dacă nu e un ecran de cursă activă
-        if (!buttons && hasActiveRide(texts)) return null
+        if (!texts.any { acceptRe.containsMatchIn(it) || rejectRe.containsMatchIn(it) }) return null
         var price: Double? = null
         val km = ArrayList<Double>()
         val mins = ArrayList<Int>()
@@ -119,15 +115,13 @@ object OfferParser {
             for (m in minRe.findAll(t)) m.groupValues[1].toIntOrNull()?.let { mins.add(it) }
         }
         val p = price ?: return null
-        if (!buttons && (km.size < 2 || mins.size < 2)) return null   // fără butoane cerem toate datele
         if (km.isEmpty() || p <= 0.0 || p > 2000.0) return null
         val pickup = if (km.size >= 2) km[0] else 0.0
         val trip = if (km.size >= 2) km[1] else km[0]
         if (pickup + trip <= 0.0 || pickup + trip > 400.0) return null
         val pMin = if (mins.size >= 2) mins[0] else 0
         val tMin = if (mins.size >= 2) mins[1] else if (mins.size == 1) mins[0] else 0
-        val pay = if (texts.any { cashRe.containsMatchIn(it) }) Pay.CASH else Pay.CARD
-        return Offer(p, pickup, trip, pMin, tMin, km.size >= 2, pay, buttons)
+        return Offer(p, pickup, trip, pMin, tMin, km.size >= 2, texts.any { cashRe.containsMatchIn(it) })
     }
 }
 

@@ -15,9 +15,7 @@ data class Ride(
     val netPerKm: Double,
     val level: Level,
     val lat: Double = Double.NaN,
-    val lon: Double = Double.NaN,
-    val pay: Int = -1,         // -1 necunoscut, 0 card, 1 numerar
-    val pu: Boolean = false    // true = locația e cea de la pasager (nu de la acceptare)
+    val lon: Double = Double.NaN
 ) {
     val totalKm: Double get() = pickupKm + tripKm
 }
@@ -29,8 +27,6 @@ object Store {
     private const val K_OFFERS = "offers"
     private const val MAX_HISTORY = 1000
     private const val MAX_OFFERS = 4000
-    /** Cât așteptăm locația de la pasager; după aceea folosim locul acceptării. */
-    const val PICKUP_WAIT_MS = 45 * 60 * 1000L
 
     private fun prefs(c: Context): SharedPreferences =
         c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -40,18 +36,6 @@ object Store {
 
     fun setRaw(c: Context, key: String, value: String) {
         prefs(c).edit().putString(key, value).apply()
-    }
-
-    fun autoCard(c: Context): Boolean = raw(c, "auto_card") != "0"
-    fun cardOnBottom(c: Context): Boolean = raw(c, "card_pos") == "bottom"
-
-    /** Valorile numerice ale cheilor care încep cu prefixul (ex. kilometrii pe zile). */
-    fun sumPrefix(c: Context, prefix: String): Double {
-        var t = 0.0
-        for ((k, v) in prefs(c).all) {
-            if (k.startsWith(prefix)) t += (v as? String)?.toDoubleOrNull() ?: 0.0
-        }
-        return t
     }
 
     fun config(c: Context): Config {
@@ -85,9 +69,7 @@ object Store {
                         o.getDouble("net"), o.getDouble("npk"),
                         Level.values()[o.getInt("lv").coerceIn(0, 2)],
                         if (o.has("la")) o.getDouble("la") else Double.NaN,
-                        if (o.has("lo")) o.getDouble("lo") else Double.NaN,
-                        o.optInt("py", -1),
-                        o.optBoolean("pu", false)
+                        if (o.has("lo")) o.getDouble("lo") else Double.NaN
                     )
                 )
             }
@@ -103,7 +85,7 @@ object Store {
             arr.put(
                 JSONObject()
                     .put("ts", r.ts).put("price", r.price).put("pk", r.pickupKm).put("tk", r.tripKm)
-                    .put("net", r.net).put("npk", r.netPerKm).put("lv", r.level.ordinal).put("py", r.pay).put("pu", r.pu)
+                    .put("net", r.net).put("npk", r.netPerKm).put("lv", r.level.ordinal)
                     .also { j ->
                         if (!r.lat.isNaN() && !r.lon.isNaN()) j.put("la", r.lat).put("lo", r.lon)
                     }
@@ -112,14 +94,13 @@ object Store {
         prefs(c).edit().putString(K_HISTORY, arr.toString()).apply()
     }
 
-    /** Salvează cursa și întoarce ts-ul ei. */
     fun addRide(c: Context, o: Offer, r: Result, lat: Double? = null, lon: Double? = null): Long {
         val ts = System.currentTimeMillis()
         val list = ArrayList<Ride>()
         list.add(
             Ride(
                 ts, o.price, o.pickupKm, o.tripKm, r.net, r.netPerKm, r.level,
-                lat ?: Double.NaN, lon ?: Double.NaN, o.pay.ordinal
+                lat ?: Double.NaN, lon ?: Double.NaN
             )
         )
         list.addAll(history(c))
@@ -127,22 +108,94 @@ object Store {
         return ts
     }
 
-    /** Pune locația de la pasager pe cursa cu ts-ul dat. */
-    fun setRidePickup(c: Context, ts: Long, lat: Double, lon: Double) {
-        save(c, history(c).map { if (it.ts == ts) it.copy(lat = lat, lon = lon, pu = true) else it })
+    /** Scoate cea mai recentă cursă (ex. pasagerul a anulat). */
+    fun deleteLatestRide(c: Context): Boolean {
+        val h = history(c)
+        if (h.isEmpty()) return false
+        save(c, h.drop(1))
+        return true
     }
-
-    /** Cursă cu locația de preluare gata de folosit (confirmată sau suficient de veche). */
-    fun pickupReady(r: Ride, now: Long): Boolean =
-        !r.lat.isNaN() && !r.lon.isNaN() && (r.pu || now - r.ts >= PICKUP_WAIT_MS)
 
     fun deleteRide(c: Context, ts: Long) {
         save(c, history(c).filter { it.ts != ts })
     }
 
     fun clearHistory(c: Context) {
-        prefs(c).edit().remove(K_HISTORY).apply()
+        prefs(c).edit().remove(K_HISTORY).putString("emp_total", "0").putString("ride_rem", "0").apply()
     }
+
+    // ---------- km parcurși cu Bolt deschis (GPS), pentru „km în gol” ----------
+    private fun day(): Long = java.time.LocalDate.now().toEpochDay()
+    private fun dbl(c: Context, k: String): Double = raw(c, k)?.toDoubleOrNull() ?: 0.0
+    fun addTrackedKm(c: Context, km: Double) {
+        setRaw(c, "trk_" + day(), (dbl(c, "trk_" + day()) + km).toString())
+        setRaw(c, "trk_total", (dbl(c, "trk_total") + km).toString())
+    }
+    // ---------- tips ----------
+    fun addTips(c: Context, amt: Double) {
+        setRaw(c, "tips_" + day(), (dbl(c, "tips_" + day()) + amt).toString())
+        setRaw(c, "tips_total", (dbl(c, "tips_total") + amt).toString())
+    }
+    fun tipsToday(c: Context): Double = dbl(c, "tips_" + day())
+    fun tipsTotal(c: Context): Double = dbl(c, "tips_total")
+    fun resetTipsToday(c: Context) {
+        setRaw(c, "tips_total", maxOf(0.0, tipsTotal(c) - tipsToday(c)).toString())
+        setRaw(c, "tips_" + day(), "0")
+    }
+
+    // ---------- km în gol (măsurați direct cu GPS, doar când nu ești într-o cursă) ----------
+    fun shiftOn(c: Context): Boolean = raw(c, "shift_on") != "0"
+    fun setShift(c: Context, on: Boolean) = setRaw(c, "shift_on", if (on) "1" else "0")
+    /** Cursă acceptată: următorii km (cât a anunțat Bolt) nu se numără ca „în gol”. */
+    fun startRide(c: Context, km: Double) = setRaw(c, "ride_rem", maxOf(0.0, dbl(c, "ride_rem") + km).toString())
+    fun addDriveKm(c: Context, km: Double) {
+        val rem = dbl(c, "ride_rem")
+        if (rem > 0.0) { setRaw(c, "ride_rem", maxOf(0.0, rem - km).toString()); return }
+        setRaw(c, "emp_" + day(), (dbl(c, "emp_" + day()) + km).toString())
+        setRaw(c, "emp_total", (dbl(c, "emp_total") + km).toString())
+    }
+    fun rideRemaining(c: Context): Double = dbl(c, "ride_rem")
+
+    // ---------- timp petrecut pe celule (pentru „oferte pe oră”) ----------
+    private var dwell: HashMap<String, Double>? = null
+    private var dwellFlushAt = 0L
+
+    @Synchronized
+    private fun dwellMap(c: Context): HashMap<String, Double> {
+        dwell?.let { return it }
+        val m = HashMap<String, Double>()
+        for (line in (raw(c, "dwell") ?: "").split("\n")) {
+            val p = line.split("=")
+            if (p.size == 2) p[1].toDoubleOrNull()?.let { m[p[0]] = it }
+        }
+        dwell = m
+        return m
+    }
+
+    @Synchronized
+    fun addDwell(c: Context, lat: Double, lon: Double, sec: Double) {
+        val m = dwellMap(c)
+        val cal = java.util.Calendar.getInstance()
+        val d = cal.get(java.util.Calendar.DAY_OF_WEEK)
+        val wk = d == java.util.Calendar.SATURDAY || d == java.util.Calendar.SUNDAY
+        val k = Math.floor(lat / Zones.CELL_DEG).toInt().toString() + ":" + Math.floor(lon / Zones.LON_STEP).toInt() + ":" +
+            cal.get(java.util.Calendar.HOUR_OF_DAY) + ":" + (if (wk) 1 else 0)
+        m[k] = (m[k] ?: 0.0) + sec
+        val now = System.currentTimeMillis()
+        if (now - dwellFlushAt > 60000L) {
+            dwellFlushAt = now
+            setRaw(c, "dwell", m.entries.joinToString("\n") { it.key + "=" + String.format(java.util.Locale.US, "%.0f", it.value) })
+        }
+    }
+
+    @Synchronized
+    fun dwellSnapshot(c: Context): Map<String, Double> = HashMap(dwellMap(c))
+
+    fun emptyToday(c: Context): Double = dbl(c, "emp_" + day())
+    fun emptyTotal(c: Context): Double = dbl(c, "emp_total")
+
+    fun trackedToday(c: Context): Double = dbl(c, "trk_" + day())
+    fun trackedTotal(c: Context): Double = dbl(c, "trk_total")
 
     // ---------- oferte văzute, cu locație (pentru zone) ----------
     /** Linie: ts,lat,lon,net/km. Se păstrează ultimele MAX_OFFERS. */
@@ -171,13 +224,12 @@ object Store {
                 val la = p[1].toDoubleOrNull() ?: continue
                 val lo = p[2].toDoubleOrNull() ?: continue
                 val npk = p[3].toDoubleOrNull() ?: Double.NaN
-                out.add(GeoEvent(ts, la, lo, 0, npk))
+                out.add(GeoEvent(ts, la, lo, 0, npk, 1, true))
             }
         }
-        val nowMs = System.currentTimeMillis()
         for (r in history(c)) {
-            if (!pickupReady(r, nowMs)) continue
-            out.add(GeoEvent(r.ts, r.lat, r.lon, 1, r.netPerKm))
+            if (r.lat.isNaN() || r.lon.isNaN()) continue
+            out.add(GeoEvent(r.ts, r.lat, r.lon, 1, r.netPerKm, 1, true))
         }
         return out
     }
