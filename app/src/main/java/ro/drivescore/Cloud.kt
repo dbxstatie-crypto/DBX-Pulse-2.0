@@ -29,7 +29,7 @@ object Cloud {
     private const val PAGE = 1000
     private const val HISTORY_DAYS = 60L
 
-    private val exec = Executors.newSingleThreadExecutor()
+    private val exec = Executors.newSingleThreadExecutor { r -> Thread { try { r.run() } catch (e: Throwable) { } } }
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var lastRun = 0L
 
@@ -195,8 +195,12 @@ object Cloud {
         val c = ctx.applicationContext
         val last = Store.raw(c, "mem_check_ts")?.toLongOrNull() ?: 0L
         if (!force && System.currentTimeMillis() - last < 10 * 60000L) return
-        if (token(c) == null) return
-        exec.execute { refreshAccess(c); main.post { done() } }
+        if (!loggedIn(c)) return
+        // IMPORTANT: token() poate face cerere de rețea (reînnoirea sesiunii după ~1 oră), deci doar pe fir de fundal
+        exec.execute {
+            try { if (token(c) != null) refreshAccess(c) } catch (e: Throwable) { }
+            main.post { done() }
+        }
     }
 
     class PayReq(val userId: String, val name: String, val email: String, val ts: String)
@@ -347,6 +351,8 @@ object Cloud {
         }
     }
 
+    private fun fin(d: Double): Double = if (d.isNaN() || d.isInfinite()) 0.0 else d
+
     private fun pending(c: Context, since: Long): List<JSONObject> {
         val out = ArrayList<JSONObject>()
         val nul = JSONObject.NULL
@@ -354,7 +360,7 @@ object Cloud {
             if (e.kind != 0 || e.ts <= since) continue
             out.add(
                 JSONObject().put("ts", e.ts).put("kind", 0).put("lat", e.lat).put("lon", e.lon)
-                    .put("net_per_km", if (e.netPerKm.isNaN()) nul else e.netPerKm)
+                    .put("net_per_km", if (e.netPerKm.isNaN() || e.netPerKm.isInfinite()) nul else e.netPerKm)
                     .put("price", nul).put("pickup_km", nul).put("trip_km", nul).put("net", nul)
             )
         }
@@ -362,8 +368,8 @@ object Cloud {
             if (r.ts <= since || r.lat.isNaN() || r.lon.isNaN()) continue
             out.add(
                 JSONObject().put("ts", r.ts).put("kind", 1).put("lat", r.lat).put("lon", r.lon)
-                    .put("net_per_km", r.netPerKm).put("price", r.price)
-                    .put("pickup_km", r.pickupKm).put("trip_km", r.tripKm).put("net", r.net)
+                    .put("net_per_km", fin(r.netPerKm)).put("price", fin(r.price))
+                    .put("pickup_km", fin(r.pickupKm)).put("trip_km", fin(r.tripKm)).put("net", fin(r.net))
             )
         }
         out.sortBy { it.getLong("ts") }

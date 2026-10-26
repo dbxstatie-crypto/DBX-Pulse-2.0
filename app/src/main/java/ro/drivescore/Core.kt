@@ -7,14 +7,14 @@ enum class Level { GOOD, OK, BAD }
 
 /** Setările șoferului (costuri + praguri). */
 data class Config(
-    val commissionPct: Double = 20.0,   // comision platformă, %
+    val commissionPct: Double = 0.0,    // comision platformă, % (0 = prețul din ofertă e deja net)
     val consumption: Double = 7.0,      // l sau kWh / 100 km
-    val energyPrice: Double = 7.5,      // lei / l sau lei / kWh
+    val energyPrice: Double = 10.0,      // lei / l sau lei / kWh
     val maintPerKm: Double = 0.20,      // uzură, anvelope, service (lei/km)
     val fixedMonthly: Double = 0.0,     // asigurare, taxe, rate etc. (lei/lună)
-    val kmPerWeek: Double = 1200.0,     // km parcurși pe săptămână
-    val greenNetPerKm: Double = 2.6,    // de la cât net/km e VERDE
-    val redNetPerKm: Double = 2.0,      // sub cât net/km e ROȘU
+    val kmPerWeek: Double = 0.0,        // km parcurși pe săptămână
+    val greenNetPerKm: Double = 2.5,    // de la cât net/km e VERDE
+    val redNetPerKm: Double = 1.8,      // sub cât net/km e ROȘU
     val shortKm: Double = 3.0           // curse până la atâția km (total) sunt mereu bune
 ) {
     val energyPerKm: Double get() = consumption / 100.0 * energyPrice

@@ -244,7 +244,7 @@ class OverlayCard(private val ctx: Context) {
         view.background = Ui.rounded(Color.parseColor(if (o.cash) "#F0261D07" else "#F00A2420"), dp(22).toFloat(), payColor, dp(3))
         view.invalidate()
 
-        top = r.netPerKm >= Ui.TOP_NPK
+        top = r.netPerKm >= (Store.raw(ctx, "top")?.replace(',', '.')?.toDoubleOrNull() ?: Ui.TOP_NPK)
         if (top) {
             val ak = "${o.price}|${o.totalKm}"
             if (ak != alertedFor) { alertedFor = ak; alertTop() }

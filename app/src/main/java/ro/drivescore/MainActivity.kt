@@ -285,6 +285,7 @@ class MainActivity : Activity() {
             1 -> renderZones()
             3 -> renderDocs()
             4 -> renderExpenses()
+            5 -> renderContact()
             else -> renderSettings()
         }
     }
@@ -326,6 +327,7 @@ class MainActivity : Activity() {
 
         content.addView(welcomeBanner())
         accessCard()?.let { content.addView(it) }
+        accountCard()?.let { content.addView(it) }
         content.addView(summaryCard("AZI", today))
         content.addView(tipsCard())
         content.addView(summaryCard("TOTAL", rides))
@@ -361,10 +363,12 @@ class MainActivity : Activity() {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
-            row.background = Ui.rounded(Ui.SURFACE, dp(16).toFloat())
-            row.setPadding(dp(14), dp(12), dp(14), dp(12))
+            // cartonaș: fundal, contur în culoarea verdictului, spațiu între cartonașe
+            val edge = (Ui.levelColor(r.level) and 0x00FFFFFF) or 0x99000000.toInt()
+            row.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat(), edge, dp(1))
+            row.setPadding(dp(14), dp(14), dp(14), dp(14))
             val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.bottomMargin = dp(8)
+            lp.bottomMargin = dp(12)
             row.layoutParams = lp
 
             val dot = View(this)
@@ -383,6 +387,18 @@ class MainActivity : Activity() {
                 )
             )
             row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            if (r.pay >= 0) {
+                val cash = r.pay == 1
+                val pc = if (cash) Ui.GREEN else Ui.BRAND
+                val badge = tv(if (cash) "CASH" else "CARD", 11f, pc, true)
+                badge.gravity = Gravity.CENTER
+                badge.setPadding(dp(10), dp(5), dp(10), dp(5))
+                badge.background = Ui.rounded((pc and 0x00FFFFFF) or 0x22000000, dp(10).toFloat(), pc, dp(1))
+                val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                blp.leftMargin = dp(8)
+                row.addView(badge, blp)
+            }
 
             row.setOnLongClickListener {
                 AlertDialog.Builder(this)
@@ -555,11 +571,19 @@ class MainActivity : Activity() {
     }
 
     private fun quickActions(): LinearLayout {
-        val r = LinearLayout(this)
-        val lpR = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lpR.bottomMargin = dp(12)
-        r.layoutParams = lpR
-        fun q(icon: Int, label: String, go: () -> Unit) {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        val lpB = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lpB.bottomMargin = dp(12)
+        box.layoutParams = lpB
+        fun row(): LinearLayout {
+            val r = LinearLayout(this)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = dp(8)
+            box.addView(r, lp)
+            return r
+        }
+        fun q(r: LinearLayout, icon: Int, label: String, go: () -> Unit) {
             val t = LinearLayout(this)
             t.orientation = LinearLayout.VERTICAL
             t.gravity = Gravity.CENTER
@@ -574,11 +598,14 @@ class MainActivity : Activity() {
             lp.setMargins(dp(4), 0, dp(4), 0)
             r.addView(t, lp)
         }
-        q(R.drawable.ic_q_radar, "Analizează zonele") { tab = 1; render() }
-        q(R.drawable.ic_st_wallet, "Cheltuieli") { tab = 4; render() }
-        q(R.drawable.ic_q_clip, "Gestionează actele") { tab = 3; render() }
-        q(R.drawable.ic_q_book, "Ghid de activare") { showGuide = true; render() }
-        return r
+        val r1 = row()
+        q(r1, R.drawable.ic_q_radar, "Analizează zonele") { tab = 1; render() }
+        q(r1, R.drawable.ic_st_wallet, "Cheltuieli") { tab = 4; render() }
+        q(r1, R.drawable.ic_q_clip, "Gestionează actele") { tab = 3; render() }
+        val r2 = row()
+        q(r2, R.drawable.ic_q_book, "Ghid de activare") { showGuide = true; render() }
+        q(r2, R.drawable.ic_st_star, "Contact") { tab = 5; render() }
+        return box
     }
 
 
@@ -1386,7 +1413,6 @@ class MainActivity : Activity() {
                     if (!isFinishing && tab == 1) render()
                 }
             })
-            c.addView(button("Ieși din cont (datele din cloud rămân)") { Cloud.logout(this); render() })
             c.addView(button("Șterge datele mele din cloud") {
                 AlertDialog.Builder(this)
                     .setMessage("Ștergi toate datele tale din cloud și ieși din comunitate? Istoricul de pe telefon rămâne.")
@@ -1399,10 +1425,51 @@ class MainActivity : Activity() {
     }
 
     // ---------- SETĂRI ----------
+    /** Card de Setări, cu contur vizibil ca să se vadă unde se termină o secțiune. */
+    private fun scard(): LinearLayout {
+        val c = card()
+        val line = (Ui.MUTED and 0x00FFFFFF) or 0x66000000
+        c.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat(), line, dp(1))
+        (c.layoutParams as LinearLayout.LayoutParams).bottomMargin = dp(18)
+        return c
+    }
+
+    /** Pagina „Contact” (separată de Setări). */
+    private fun renderContact() {
+        val ct = card()
+        ct.addView(tv("CONTACT", 13f, Ui.BRAND, true))
+        ct.addView(tv("Ai o idee, ai găsit o problemă sau ceva nu merge cum te aștepți? Scrie-mi. Aplicația o fac împreună cu voi, șoferii, și fiecare sugestie ajută.", 14f, Ui.TEXT))
+        val ct2 = tv("Pentru o problemă, spune-mi pe ce telefon ești și ce ai văzut pe ecran. O captură mă ajută mult.", 13f, Ui.MUTED)
+        ct2.setPadding(0, dp(6), 0, 0)
+        ct.addView(ct2)
+        val em = tv(CONTACT_EMAIL, 17f, Ui.BRAND, true)
+        em.setPadding(0, dp(10), 0, dp(2))
+        em.setOnClickListener { copyEmail() }
+        ct.addView(em)
+        ct.addView(tv("Răspund cât de repede pot.", 13f, Ui.MUTED))
+        ct.addView(button("Scrie-mi un email") { contactMail() })
+        content.addView(ct)
+    }
+
+    /** Contul, pe pagina principală: cine e conectat și ieșirea din cont. */
+    private fun accountCard(): LinearLayout? {
+        if (!Cloud.configured()) return null
+        val c = card()
+        if (Cloud.loggedIn(this)) {
+            c.addView(tv("CONT", 12f, Ui.MUTED, true))
+            c.addView(tv(Cloud.email(this) + (if (Cloud.role(this) == "admin") " · admin" else ""), 14f, Ui.TEXT))
+            c.addView(button("Ieși din cont") { Cloud.logout(this); render() })
+        } else {
+            c.addView(tv("Nu ești conectat. Cu un cont păstrezi datele și intri în comunitate.", 13f, Ui.MUTED))
+            c.addView(button("Intră în cont") { tab = 1; render() })
+        }
+        return c
+    }
+
     private fun renderSettings() {
         // simulator
-        val sim = card()
-        sim.addView(tv("SIMULATOR", 12f, Ui.MUTED, true))
+        val sim = scard()
+        sim.addView(tv("SIMULATOR", 13f, Ui.BRAND, true))
         val simHint = tv("Încearcă o cursă și vezi exact cum arată cardul cu setările tale.", 13f, Ui.MUTED)
         simHint.setPadding(0, dp(4), 0, dp(8))
         sim.addView(simHint)
@@ -1439,26 +1506,27 @@ class MainActivity : Activity() {
         refresh()
 
         // costuri
-        val costs = card()
+        val costs = scard()
         costs.addView(tv("COSTURI (pentru „net”)", 12f, Ui.MUTED, true))
-        costs.addView(settingRow("comm", "Comision platformă (%)", 20.0))
+        costs.addView(settingRow("comm", "Comision platformă (%) — 0 dacă prețul e deja net", 0.0))
         costs.addView(settingRow("cons", "Consum (l sau kWh / 100 km)", 7.0))
-        costs.addView(settingRow("eprice", "Preț combustibil / energie (lei)", 7.5))
+        costs.addView(settingRow("eprice", "Preț combustibil / energie (lei)", 10.0))
         costs.addView(settingRow("maint", "Mentenanță + uzură (lei/km)", 0.20))
         costs.addView(settingRow("fix", "Costuri fixe lunare: asigurare, taxe (lei)", 0.0))
-        costs.addView(settingRow("kmw", "Km pe săptămână (pt. costuri fixe)", 1200.0))
+        costs.addView(settingRow("kmw", "Km pe săptămână (pt. costuri fixe)", 0.0))
         content.addView(costs)
 
         // praguri
-        val th = card()
-        th.addView(tv("PRAGURI VERDE / GALBEN / ROȘU", 12f, Ui.MUTED, true))
-        th.addView(settingRow("green", "Verde de la (lei/km net)", 2.6))
-        th.addView(settingRow("red", "Roșu sub (lei/km net)", 2.0))
+        val th = scard()
+        th.addView(tv("PRAGURI: VERDE / GALBEN / ROȘU / VIOLET", 13f, Ui.BRAND, true))
+        th.addView(settingRow("green", "Verde de la (lei/km net)", 2.5))
+        th.addView(settingRow("red", "Roșu sub (lei/km net)", 1.8))
+        th.addView(settingRow("top", "Violet „DE NERATAT” de la (lei/km net)", 4.5))
         th.addView(settingRow("short", "Cursă scurtă = mereu bună, până la (km total)", 3.0))
         content.addView(th)
 
         if (Cloud.REQUIRE_INVITE && Cloud.role(this) == "admin") {
-            val iv = card()
+            val iv = scard()
             iv.addView(tv("INVITAȚII (doar admin)", 12f, Ui.MUTED, true))
             iv.addView(tv("Fiecare cod merge o singură dată: 7 zile gratuite, apoi 19,9 lei pe lună. Nelimitat e pentru prieteni.", 13f, Ui.TEXT))
             iv.addView(button("Cod nou — 7 zile gratuite") {
@@ -1487,10 +1555,24 @@ class MainActivity : Activity() {
             })
             content.addView(iv)
         }
-        val gd = card()
-        gd.addView(tv("AJUTOR", 12f, Ui.MUTED, true))
+        val gd = scard()
+        gd.addView(tv("AJUTOR", 13f, Ui.BRAND, true))
         gd.addView(button("Ghid de activare (pas cu pas)") { showGuide = true; render() })
         gd.addView(tv("Versiunea instalată: " + Updater.currentName(this), 12f, Ui.MUTED))
+        val crash = Store.raw(this, "last_crash") ?: ""
+        if (crash.isNotEmpty()) {
+            gd.addView(tv("Ultima eroare a aplicației (trimite-o dezvoltatorului):\n" + crash, 10f, Ui.AMBER))
+            gd.addView(button("Șterge mesajul de eroare") { Store.setRaw(this, "last_crash", ""); render() })
+        }
+        if (Cloud.loggedIn(this)) {
+            gd.addView(tv("Cont: " + Cloud.email(this) + (if (Cloud.role(this) == "admin") " · admin" else ""), 12f, Ui.MUTED))
+            gd.addView(button("Reîmprospătează contul (rol și acces)") {
+                Cloud.refreshAccessAsync(this, true) {
+                    Toast.makeText(this, "Cont actualizat.", Toast.LENGTH_SHORT).show()
+                    render()
+                }
+            })
+        }
         gd.addView(button("Caută actualizări") {
             Updater.check(this, true) {
                 if (Updater.available(this) != null) render()
@@ -1498,21 +1580,8 @@ class MainActivity : Activity() {
             }
         })
         content.addView(gd)
-        val ct = card()
-        ct.addView(tv("CONTACT", 12f, Ui.MUTED, true))
-        ct.addView(tv("Ai o idee, ai găsit o problemă sau ceva nu merge cum te aștepți? Scrie-mi. Aplicația o fac împreună cu voi, șoferii, și fiecare sugestie ajută.", 14f, Ui.TEXT))
-        val ct2 = tv("Pentru o problemă, spune-mi pe ce telefon ești și ce ai văzut pe ecran. O captură mă ajută mult.", 13f, Ui.MUTED)
-        ct2.setPadding(0, dp(6), 0, 0)
-        ct.addView(ct2)
-        val em = tv(CONTACT_EMAIL, 17f, Ui.BRAND, true)
-        em.setPadding(0, dp(10), 0, dp(2))
-        em.setOnClickListener { copyEmail() }
-        ct.addView(em)
-        ct.addView(tv("Răspund cât de repede pot.", 13f, Ui.MUTED))
-        ct.addView(button("Scrie-mi un email") { contactMail() })
-        content.addView(ct)
-        val asp = card()
-        asp.addView(tv("ASPECT", 12f, Ui.MUTED, true))
+        val asp = scard()
+        asp.addView(tv("ASPECT", 13f, Ui.BRAND, true))
         val light = Store.raw(this, "theme") == "light"
         asp.addView(button(if (light) "Temă luminoasă — treci pe întunecată" else "Temă întunecată — treci pe luminoasă") {
             Store.setRaw(this, "theme", if (light) "dark" else "light")
@@ -1533,7 +1602,8 @@ class MainActivity : Activity() {
         }
         asp.addView(chips)
         content.addView(asp)
-        val au = card()
+        val au = scard()
+        au.addView(tv("ALERTE ȘI CARD PESTE BOLT", 13f, Ui.BRAND, true))
         au.addView(tv("Când se salvează o cursă: doar după ce Bolt ți-o atribuie (apare ecranul cursei active). Nu se salvează ofertele respinse, cele luate de alt șofer, cele anulate de pasager sau anulate de tine.", 13f, Ui.TEXT))
         val alOn = Store.raw(this, "alert_top") != "0"
         au.addView(button(if (alOn) "Alertă „DE NERATAT” (vibrație + sunet): PORNITĂ" else "Alertă „DE NERATAT”: OPRITĂ") {
@@ -1549,8 +1619,8 @@ class MainActivity : Activity() {
         content.addView(au)
 
         // diagnostic
-        val diag = card()
-        diag.addView(tv("DIAGNOSTIC", 12f, Ui.MUTED, true))
+        val diag = scard()
+        diag.addView(tv("DIAGNOSTIC", 13f, Ui.BRAND, true))
         val d = Store.dump(this)
         val dv = tv(
             if (d.isEmpty()) "Încă nu am citit nimic din Bolt. Deschide o ofertă cu serviciul activ."

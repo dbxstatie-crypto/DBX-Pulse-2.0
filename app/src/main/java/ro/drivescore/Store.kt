@@ -15,7 +15,8 @@ data class Ride(
     val netPerKm: Double,
     val level: Level,
     val lat: Double = Double.NaN,
-    val lon: Double = Double.NaN
+    val lon: Double = Double.NaN,
+    val pay: Int = -1            // 0 = card, 1 = cash, -1 = necunoscut (curse vechi)
 ) {
     val totalKm: Double get() = pickupKm + tripKm
 }
@@ -69,7 +70,8 @@ object Store {
                         o.getDouble("net"), o.getDouble("npk"),
                         Level.values()[o.getInt("lv").coerceIn(0, 2)],
                         if (o.has("la")) o.getDouble("la") else Double.NaN,
-                        if (o.has("lo")) o.getDouble("lo") else Double.NaN
+                        if (o.has("lo")) o.getDouble("lo") else Double.NaN,
+                        if (o.has("pay")) o.getInt("pay") else -1
                     )
                 )
             }
@@ -79,15 +81,18 @@ object Store {
         return out
     }
 
+    private fun fd(d: Double): Double = if (d.isNaN() || d.isInfinite()) 0.0 else d
+
     private fun save(c: Context, rides: List<Ride>) {
         val arr = JSONArray()
         for (r in rides.take(MAX_HISTORY)) {
             arr.put(
                 JSONObject()
-                    .put("ts", r.ts).put("price", r.price).put("pk", r.pickupKm).put("tk", r.tripKm)
-                    .put("net", r.net).put("npk", r.netPerKm).put("lv", r.level.ordinal)
+                    .put("ts", r.ts).put("price", fd(r.price)).put("pk", fd(r.pickupKm)).put("tk", fd(r.tripKm))
+                    .put("net", fd(r.net)).put("npk", fd(r.netPerKm)).put("lv", r.level.ordinal)
                     .also { j ->
                         if (!r.lat.isNaN() && !r.lon.isNaN()) j.put("la", r.lat).put("lo", r.lon)
+                        if (r.pay >= 0) j.put("pay", r.pay)
                     }
             )
         }
@@ -100,7 +105,7 @@ object Store {
         list.add(
             Ride(
                 ts, o.price, o.pickupKm, o.tripKm, r.net, r.netPerKm, r.level,
-                lat ?: Double.NaN, lon ?: Double.NaN
+                lat ?: Double.NaN, lon ?: Double.NaN, if (o.cash) 1 else 0
             )
         )
         list.addAll(history(c))
