@@ -11,8 +11,8 @@ android {
         applicationId = "ro.drivescore"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "2.5"
+        versionCode = 8
+        versionName = "2.6"
     }
 
     // Cheie de debug fixă, ca noile versiuni să se instaleze PESTE cele vechi (fără dezinstalare).
