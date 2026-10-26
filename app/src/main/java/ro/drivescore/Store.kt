@@ -149,6 +149,7 @@ object Store {
     /** Cursă acceptată: următorii km (cât a anunțat Bolt) nu se numără ca „în gol”. */
     fun startRide(c: Context, km: Double) = setRaw(c, "ride_rem", maxOf(0.0, dbl(c, "ride_rem") + km).toString())
     fun addDriveKm(c: Context, km: Double) {
+        addTrackedKm(c, km)   // toți km măsurați cu tura pornită (în gol + în cursă), ca să se vadă ce se numără
         val rem = dbl(c, "ride_rem")
         if (rem > 0.0) { setRaw(c, "ride_rem", maxOf(0.0, rem - km).toString()); return }
         setRaw(c, "emp_" + day(), (dbl(c, "emp_" + day()) + km).toString())

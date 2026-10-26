@@ -105,7 +105,7 @@ class OverlayCard(private val ctx: Context) {
             val d = ctx.getDrawable(if (cash) R.drawable.wm_cash else R.drawable.wm_card)?.mutate() ?: return
             d.setTint(payColor)
             d.alpha = 75
-            if (top) {
+            if (this@OverlayCard.top) {
                 glowPaint.style = Paint.Style.STROKE
                 glowPaint.strokeWidth = dp(3).toFloat()
                 glowPaint.color = Ui.TOP

@@ -1,4 +1,4 @@
-# DBX Pulse 2.2
+# DBX Pulse 2.5
 
 Cardul cu câștig NET / km peste Bolt Driver.
 
@@ -34,3 +34,6 @@ apoi la *Actions → Build APK → Run workflow*. După ~3 min descarci `DBX-Pul
 - `min_version_code` mai mare decât al utilizatorului = actualizare obligatorie.
 - Pentru fiecare versiune nouă: crești `versionCode`/`versionName` în `app/build.gradle.kts`, construiești APK-ul, îl urci în Storage (bucket `apk`, fișier `dbx-pulse.apk`, Upsert) și rulezi în SQL Editor:
   `update public.app_release set version_code = 8, version_name = '2.6', notes = 'Ce e nou' where id = 1;`
+
+## Cheltuieli
+Acasă → „Cheltuieli": alimentări (lei, litri, km de pe bord) și alte cheltuieli; calculează consumul real și prețul mediu.

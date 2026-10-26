@@ -105,22 +105,29 @@ class OfferService : AccessibilityService() {
         override fun onProviderDisabled(p: String) {}
     }
 
+    private var tracking = false
+
+    /** Pornește GPS-ul pentru km în gol. Se reîncearcă și mai târziu, dacă permisiunea de locație a fost dată după activarea serviciului. */
     @Suppress("MissingPermission")
+    private fun ensureTracking() {
+        if (tracking || !Geo.hasPermission(this)) return
+        try {
+            (getSystemService(LOCATION_SERVICE) as LocationManager)
+                .requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 10f, trackListener, Looper.getMainLooper())
+            tracking = true
+        } catch (e: Exception) { }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        try {
-            if (Geo.hasPermission(this)) {
-                (getSystemService(LOCATION_SERVICE) as LocationManager)
-                    .requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 10f, trackListener, Looper.getMainLooper())
-            }
-        } catch (e: Exception) { }
+        ensureTracking()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
-        if (pkg != null && PACKAGES.contains(pkg)) boltSeenAt = System.currentTimeMillis()
+        if (pkg != null && PACKAGES.contains(pkg)) { boltSeenAt = System.currentTimeMillis(); ensureTracking() }
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && pkg != null && PACKAGES.contains(pkg)) {
             val t = ArrayList<String>()
             event.text?.forEach { t.add(it.toString()) }

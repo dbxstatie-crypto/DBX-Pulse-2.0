@@ -17,6 +17,7 @@ object Names {
     private var app: Context? = null
     private var busy = false
     private var failures = 0
+    private var lastFailAt = 0L
 
     fun init(c: Context) { app = c.applicationContext }
 
@@ -35,6 +36,8 @@ object Names {
     /** Caută în fundal numele zonelor care încă nu-l au (maxim 12, ~1 cerere/secundă); apoi cheamă done o singură dată. */
     fun prefetch(zones: List<Zone>, done: () -> Unit) {
         val c = app ?: return
+        // după 6 eșecuri la rând (ex. fără internet) ne oprim, dar reîncercăm după 10 minute
+        if (failures >= 6 && System.currentTimeMillis() - lastFailAt > 10 * 60000L) failures = 0
         if (busy || failures >= 6) return
         val todo = zones.filter { get(it.lat, it.lon) == null }.take(12)
         if (todo.isEmpty()) return
@@ -49,10 +52,10 @@ object Names {
                         Store.setRaw(c, "nm_" + key(z.lat, z.lon), n)
                         got++
                         failures = 0
-                    } else failures++
+                    } else { failures++; lastFailAt = System.currentTimeMillis() }
                     Thread.sleep(1100)
                 }
-            } catch (e: Exception) { failures++ }
+            } catch (e: Exception) { failures++; lastFailAt = System.currentTimeMillis() }
             busy = false
             if (got > 0) main.post { done() }
         }
