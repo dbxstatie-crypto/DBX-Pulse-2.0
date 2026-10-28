@@ -81,7 +81,7 @@ class OfferService : AccessibilityService() {
             if (shown || waiting) {
                 handler.postDelayed(this, 1000)
             } else {
-                if (pendingOffer != null) Store.logEv(this, "Oferta NU a devenit cursă (nu a apărut ecranul cursei active în 45 s)")
+                if (pendingOffer != null) Store.logEv(this@OfferService, "Oferta NU a devenit cursă (nu a apărut ecranul cursei active în 45 s)")
                 pendingOffer = null
                 pendingResult = null
             }
