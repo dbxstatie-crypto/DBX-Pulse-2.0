@@ -101,6 +101,28 @@ object OfferParser {
     fun hasAccept(texts: List<String>) = texts.any { acceptRe.containsMatchIn(it) }
     fun hasActiveRide(texts: List<String>) = texts.any { activeRideRe.containsMatchIn(it) }
 
+    // „1 min • 0.2 km” (ridicare) și „12 min • 5.3 km” (cursă): perechi timp+distanță, în ordinea de pe ecran
+    private val pairRe = Regex("""(\d+)\s*min\W{0,6}(\d+(?:[.,]\d+)?)\s*(km|m)(?![\p{L}\d])""", RegexOption.IGNORE_CASE)
+    private val pairRe2 = Regex("""(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(km|m)\W{0,6}(\d+)\s*min(?![\p{L}])""", RegexOption.IGNORE_CASE)
+
+    private fun pairs(texts: List<String>): List<Pair<Int, Double>> {
+        val out = ArrayList<Pair<Int, Double>>()
+        for (t in texts) {
+            val found = ArrayList<Triple<Int, Int, Double>>()
+            for (m in pairRe.findAll(t)) {
+                val v = num(m.groupValues[2]) ?: continue
+                found.add(Triple(m.range.first, m.groupValues[1].toIntOrNull() ?: 0, if (m.groupValues[3].equals("m", true)) v / 1000.0 else v))
+            }
+            if (found.isEmpty()) for (m in pairRe2.findAll(t)) {
+                val v = num(m.groupValues[1]) ?: continue
+                found.add(Triple(m.range.first, m.groupValues[3].toIntOrNull() ?: 0, if (m.groupValues[2].equals("m", true)) v / 1000.0 else v))
+            }
+            found.sortedBy { it.first }.forEach { out.add(Pair(it.second, it.third)) }
+        }
+        return out
+    }
+
+    /** Citire strictă: fără două distanțe (ridicare + cursă) nu afișăm nimic, ca să nu apară lei/km absurzi dintr-un ecran citit pe jumătate. */
     fun parse(texts: List<String>): Offer? {
         if (!texts.any { acceptRe.containsMatchIn(it) || rejectRe.containsMatchIn(it) }) return null
         var price: Double? = null
@@ -115,13 +137,23 @@ object OfferParser {
             for (m in minRe.findAll(t)) m.groupValues[1].toIntOrNull()?.let { mins.add(it) }
         }
         val p = price ?: return null
-        if (km.isEmpty() || p <= 0.0 || p > 2000.0) return null
-        val pickup = if (km.size >= 2) km[0] else 0.0
-        val trip = if (km.size >= 2) km[1] else km[0]
-        if (pickup + trip <= 0.0 || pickup + trip > 400.0) return null
-        val pMin = if (mins.size >= 2) mins[0] else 0
-        val tMin = if (mins.size >= 2) mins[1] else if (mins.size == 1) mins[0] else 0
-        return Offer(p, pickup, trip, pMin, tMin, km.size >= 2, texts.any { cashRe.containsMatchIn(it) })
+        if (p <= 0.0 || p > 2000.0) return null
+        val pr = pairs(texts)
+        val pickup: Double
+        val trip: Double
+        val pMin: Int
+        val tMin: Int
+        if (pr.size >= 2) {
+            pickup = pr[0].second; trip = pr[1].second; pMin = pr[0].first; tMin = pr[1].first
+        } else if (km.size >= 2) {
+            pickup = km[0]; trip = km[1]
+            pMin = if (mins.size >= 2) mins[0] else 0
+            tMin = if (mins.size >= 2) mins[1] else 0
+        } else return null
+        val total = pickup + trip
+        if (total <= 0.0 || total > 400.0) return null
+        if (p / total > 25.0) return null
+        return Offer(p, pickup, trip, pMin, tMin, true, texts.any { cashRe.containsMatchIn(it) })
     }
 }
 

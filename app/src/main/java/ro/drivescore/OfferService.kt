@@ -27,6 +27,7 @@ class OfferService : AccessibilityService() {
         private const val MISS_GRACE_MS = 1500L
         private const val ACTIVE_RIDE_WINDOW_MS = 45000L
         private const val DEDUP_MS = 30000L
+        private const val STABLE_MS = 300L       // aceeași ofertă citită identic de 2 ori înainte să apară cardul
         private const val AUTO_MAX_MS = 9000L   // o ofertă acceptată automat dispare repede
     }
 
@@ -54,6 +55,7 @@ class OfferService : AccessibilityService() {
     private var offerAuto = false
     private var pendingMid = false
     private var lastCancelAt = 0L
+    private var cancelSeenAt = 0L
     private var cancelClickAt = 0L
     private var rejectedAt = 0L
     private var missScheduled = false
@@ -63,6 +65,9 @@ class OfferService : AccessibilityService() {
     private var lastDump = ""
     private var lastOfferKey: String? = null
     private var lastOfferAt = 0L
+    private var stableKey: String? = null
+    private var stableAt = 0L
+    private var lastIncompleteLogAt = 0L
 
     private val hideRunnable = Runnable {
         missScheduled = false
@@ -76,6 +81,7 @@ class OfferService : AccessibilityService() {
             if (shown || waiting) {
                 handler.postDelayed(this, 1000)
             } else {
+                if (pendingOffer != null) Store.logEv(this, "Oferta NU a devenit cursă (nu a apărut ecranul cursei active în 45 s)")
                 pendingOffer = null
                 pendingResult = null
             }
@@ -137,7 +143,7 @@ class OfferService : AccessibilityService() {
             // orice apăsare în Bolt cât oferta e pe ecran (în afară de „Acceptă”) = ai făcut tu ceva, nu acceptare automată
             if (OfferParser.hasAccept(t)) acceptNow(OfferParser.hasNext(t))
             else if (shown || OfferParser.hasReject(t)) rejectedAt = System.currentTimeMillis()
-            if (!shown && OfferParser.hasCancelClick(t)) cancelClickAt = System.currentTimeMillis()
+            if (!shown && OfferParser.hasCancelClick(t)) { cancelClickAt = System.currentTimeMillis(); Store.logEv(this, "Ai apăsat un buton de anulare: " + t.take(3).joinToString(" | ")) }
         }
         queueScan()
     }
@@ -194,17 +200,20 @@ class OfferService : AccessibilityService() {
     }
 
     private fun collectTexts(): List<String> {
-        val out = ArrayList<String>()
+        val wins = ArrayList<List<String>>()
         var found = false
         rejectRect = null
+        var offerRect: Rect? = null
         try {
             val ws = windows
             if (ws != null) {
                 for (w in ws) {
                     val r = w.root ?: continue
                     if (PACKAGES.contains(r.packageName?.toString())) {
-                        walk(r, out, 0)
-                        if (rejectRect == null) rejectRect = findReject(r, 0)
+                        val one = ArrayList<String>()
+                        walk(r, one, 0)
+                        wins.add(one)
+                        if (offerRect == null && (OfferParser.hasAccept(one) || OfferParser.hasReject(one))) offerRect = findReject(r, 0)
                         found = true
                     }
                 }
@@ -214,8 +223,19 @@ class OfferService : AccessibilityService() {
         }
         if (!found) {
             val r = rootInActiveWindow
-            if (r != null && PACKAGES.contains(r.packageName?.toString())) { walk(r, out, 0); rejectRect = findReject(r, 0) }
+            if (r != null && PACKAGES.contains(r.packageName?.toString())) {
+                val one = ArrayList<String>()
+                walk(r, one, 0)
+                wins.add(one)
+                offerRect = findReject(r, 0)
+            }
         }
+        rejectRect = offerRect
+        // dacă o singură fereastră are butoanele Acceptă/Respinge, citim DOAR din ea: cifrele din celelalte ferestre (hartă, cursă activă) nu se amestecă
+        val offerOnly = wins.filter { OfferParser.hasAccept(it) || OfferParser.hasReject(it) }
+        if (offerOnly.size == 1) return offerOnly[0]
+        val out = ArrayList<String>()
+        for (w in wins) out.addAll(w)
         return out
     }
 
@@ -230,12 +250,16 @@ class OfferService : AccessibilityService() {
             .take(6).toSet()
 
     /** Scoate din istoric o cursă salvată: cea a cărei amprentă apare pe ecran, altfel cea mai recentă. */
-    private fun removeLogged(texts: List<String>, msg: String) {
+    private fun removeLogged(texts: List<String>, msg: String, by: Int) {
         val now = System.currentTimeMillis()
         recent.removeAll { now - it.ts > 90 * 60000L }
-        val target = recent.lastOrNull { l -> l.fp.isNotEmpty() && texts.any { it in l.fp } } ?: recent.lastOrNull() ?: return
+        // fără amprentă sigură scoatem doar o cursă salvată în ultimele 30 de minute, niciodată una veche
+        val target = recent.lastOrNull { l -> l.fp.isNotEmpty() && texts.any { it in l.fp } }
+            ?: recent.lastOrNull { now - it.ts < 30 * 60000L }
+        if (target == null) { Store.logEv(this, "ANULARE: nicio cursă recentă de scos (" + msg + ")"); return }
         recent.remove(target)
-        Store.deleteRide(this, target.ts)
+        Store.logEv(this, "ANULARE: cursă marcată anulată (" + msg + "), " + Fmt.d1(target.km) + " km")
+        Store.cancelRide(this, target.ts, by)
         Store.startRide(this, -target.km)
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
@@ -248,20 +272,28 @@ class OfferService : AccessibilityService() {
         lastCancelAt = now
         pendingOffer = null
         pendingResult = null
-        removeLogged(texts, "Pasagerul a anulat — cursa a fost scoasă din istoric")
+        removeLogged(texts, "Pasagerul a anulat — cursa e marcată „Anulată”", 1)
     }
 
     private fun scan() {
         val texts = collectTexts()
         if (texts.isNotEmpty() && OfferParser.hasActiveRide(texts)) lastActiveSeenAt = System.currentTimeMillis()
-        if (texts.isNotEmpty() && OfferParser.hasCancelled(texts)) handleCancel(texts)
+        if (texts.isNotEmpty() && OfferParser.hasCancelled(texts)) {
+            // același ecran „Pasagerul a anulat” se tratează o singură dată, oricât timp rămâne pe ecran
+            val nowC = System.currentTimeMillis()
+            if (nowC - cancelSeenAt > 20000L) {
+                Store.logEv(this, "TEXT DE ANULARE pe ecran: " + texts.filter { OfferParser.hasCancelled(listOf(it)) }.take(3).joinToString(" | "))
+                handleCancel(texts)
+            }
+            cancelSeenAt = nowC
+        }
         // ai apăsat tu „Anulează cursa” și ecranul cursei active a dispărut => cursa anulată de tine
         if (cancelClickAt > 0L) {
             val t = System.currentTimeMillis()
             if (t - cancelClickAt > 30000L) cancelClickAt = 0L
             else if (texts.isNotEmpty() && !OfferParser.hasActiveRide(texts) && OfferParser.parse(texts) == null) {
                 cancelClickAt = 0L
-                removeLogged(texts, "Cursa anulată de tine — scoasă din istoric")
+                removeLogged(texts, "Cursa anulată de tine — marcată „Anulată”", 2)
             }
         }
         if (texts.isEmpty()) {
@@ -269,6 +301,25 @@ class OfferService : AccessibilityService() {
             return
         }
         val o = OfferParser.parse(texts)
+        if (o != null && !shown) {
+            val nowS = System.currentTimeMillis()
+            val k = o.key() + "|" + o.cash
+            if (k != stableKey) {
+                stableKey = k
+                stableAt = nowS
+                handler.postDelayed({ scan() }, STABLE_MS + 60)
+                return
+            }
+            if (nowS - stableAt < STABLE_MS) return
+        }
+        if (o == null) {
+            stableKey = null
+            val nowI = System.currentTimeMillis()
+            if (!shown && OfferParser.hasAccept(texts) && nowI - lastIncompleteLogAt > 20000L) {
+                lastIncompleteLogAt = nowI
+                Store.logEv(this, "Citire INCOMPLETĂ ignorată: " + texts.joinToString(" | ").take(160))
+            }
+        }
         if (o != null) {
             offerFp = fingerprint(texts)
             if (OfferParser.hasAuto(texts)) offerAuto = true
@@ -307,7 +358,7 @@ class OfferService : AccessibilityService() {
         if (po != null && System.currentTimeMillis() - pendingAt < ACTIVE_RIDE_WINDOW_MS && texts.isNotEmpty()) {
             // diagnostic: ce text avea ecranul după ofertă (ca să putem recunoaște „cursă acceptată”)
             val d = "Ecran după ofertă (nerecunoscut ca cursă):\n" + texts.take(70).joinToString(" | ")
-            if (d != lastDump) { lastDump = d; Store.setDump(this, d) }
+            if (d != lastDump) { lastDump = d; Store.setDump(this, d); Store.logEv(this, d.take(480)) }
         }
         if (shown && !missScheduled) {
             missScheduled = true
@@ -343,6 +394,8 @@ class OfferService : AccessibilityService() {
         if (!shown) {
             shownAt = System.currentTimeMillis()
             offerMidRide = shownAt - lastActiveSeenAt < 20000L
+            Store.logEv(this, "OFERTĂ pe ecran: " + Fmt.d2(o.price) + " lei, " + Fmt.d1(o.pickupKm) + "+" + Fmt.d1(o.tripKm) + " km, " + Fmt.d2(r.netPerKm) + " lei/km" +
+                (if (o.cash) " [cash]" else "") + (if (offerAuto) " [acceptare automată]" else "") + (if (offerMidRide) " [în cursă]" else ""))
             val lp = WindowManager.LayoutParams(
                 resources.displayMetrics.widthPixels - dp(24),
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -448,6 +501,7 @@ class OfferService : AccessibilityService() {
         val r = r0 ?: Scorer.score(o, Store.config(this))
         val loc = Geo.last(this)
         val ts = Store.addRide(this, o, r, loc?.first, loc?.second)
+        Store.logEv(this, "CURSĂ SALVATĂ: " + Fmt.d2(o.price) + " lei, " + Fmt.d1(o.totalKm) + " km" + (if (o.cash) " [cash]" else " [card]"))
         Store.startRide(this, o.totalKm)
         recent.add(Logged(ts, o.totalKm, fp))
         Cloud.syncAsync(this)

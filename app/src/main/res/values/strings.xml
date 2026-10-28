@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="service_desc">Citește oferta din Bolt Driver (preț și kilometri) ca să-ți arate câștigul net pe km. Datele rămân pe telefon; doar dacă intri în comunitatea DBX Pulse, locația și cursele se trimit în contul comun.</string>
+    <string name="service_desc">Citește oferta din aplicația de ridesharing (preț și kilometri) ca să-ți arate câștigul net pe km. Datele rămân pe telefon; doar dacă intri în comunitatea DBX Pulse, locația și cursele se trimit în contul comun.</string>
 </resources>

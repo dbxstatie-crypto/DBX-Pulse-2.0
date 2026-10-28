@@ -16,7 +16,8 @@ data class Ride(
     val level: Level,
     val lat: Double = Double.NaN,
     val lon: Double = Double.NaN,
-    val pay: Int = -1            // 0 = card, 1 = cash, -1 = necunoscut (curse vechi)
+    val pay: Int = -1,           // 0 = card, 1 = cash, -1 = necunoscut (curse vechi)
+    val canceled: Int = 0        // 0 = valabilă, 1 = anulată de pasager, 2 = anulată de tine (rămâne în listă, nu se numără)
 ) {
     val totalKm: Double get() = pickupKm + tripKm
 }
@@ -57,7 +58,11 @@ object Store {
     }
 
     // ---------- istoric ----------
-    fun history(c: Context): List<Ride> {
+    /** Doar cursele care se numără (fără cele anulate). */
+    fun history(c: Context): List<Ride> = historyAll(c).filter { it.canceled == 0 }
+
+    /** Toate cursele, inclusiv cele marcate „anulate”. */
+    fun historyAll(c: Context): List<Ride> {
         val s = prefs(c).getString(K_HISTORY, null) ?: return emptyList()
         val out = ArrayList<Ride>()
         try {
@@ -71,7 +76,8 @@ object Store {
                         Level.values()[o.getInt("lv").coerceIn(0, 2)],
                         if (o.has("la")) o.getDouble("la") else Double.NaN,
                         if (o.has("lo")) o.getDouble("lo") else Double.NaN,
-                        if (o.has("pay")) o.getInt("pay") else -1
+                        if (o.has("pay")) o.getInt("pay") else -1,
+                        if (o.has("cx")) o.getInt("cx") else 0
                     )
                 )
             }
@@ -93,6 +99,7 @@ object Store {
                     .also { j ->
                         if (!r.lat.isNaN() && !r.lon.isNaN()) j.put("la", r.lat).put("lo", r.lon)
                         if (r.pay >= 0) j.put("pay", r.pay)
+                        if (r.canceled > 0) j.put("cx", r.canceled)
                     }
             )
         }
@@ -108,21 +115,32 @@ object Store {
                 lat ?: Double.NaN, lon ?: Double.NaN, if (o.cash) 1 else 0
             )
         )
-        list.addAll(history(c))
+        list.addAll(historyAll(c))
         save(c, list)
         return ts
     }
 
     /** Scoate cea mai recentă cursă (ex. pasagerul a anulat). */
     fun deleteLatestRide(c: Context): Boolean {
-        val h = history(c)
+        val h = historyAll(c)
         if (h.isEmpty()) return false
         save(c, h.drop(1))
         return true
     }
 
+    /** Ștergere definitivă (doar când o ceri tu). */
     fun deleteRide(c: Context, ts: Long) {
-        save(c, history(c).filter { it.ts != ts })
+        save(c, historyAll(c).filter { it.ts != ts })
+    }
+
+    /** Marchează cursa ca anulată: rămâne în listă, dar nu se mai numără. by: 1 = pasager, 2 = tu. */
+    fun cancelRide(c: Context, ts: Long, by: Int) {
+        save(c, historyAll(c).map { if (it.ts == ts) it.copy(canceled = by) else it })
+    }
+
+    /** Refă o cursă marcată anulată (o numără din nou). */
+    fun restoreRide(c: Context, ts: Long) {
+        save(c, historyAll(c).map { if (it.ts == ts) it.copy(canceled = 0) else it })
     }
 
     fun clearHistory(c: Context) {
@@ -246,4 +264,16 @@ object Store {
     }
 
     fun dump(c: Context): String = prefs(c).getString(K_DUMP, null) ?: ""
+
+    // ---------- jurnal de evenimente (ultimele 60), pentru diagnostic ----------
+    @Synchronized
+    fun logEv(c: Context, msg: String) {
+        try {
+            val t = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            val old = (prefs(c).getString("evlog", null) ?: "").split("\n").filter { it.isNotBlank() }
+            val line = t + " " + msg.replace("\n", " ").take(500)
+            prefs(c).edit().putString("evlog", (old + line).takeLast(60).joinToString("\n")).apply()
+        } catch (e: Exception) { }
+    }
+    fun evlog(c: Context): String = prefs(c).getString("evlog", null) ?: ""
 }

@@ -119,7 +119,7 @@ class MainActivity : Activity() {
         logoRow.addView(l1); logoRow.addView(l2)
         logoRow.addView(l3, LinearLayout.LayoutParams(dp(30), dp(26)))
         header.addView(logoRow)
-        header.addView(tv("Statistici inteligente pentru șoferi Bolt", 13f, Ui.TEXT))
+        header.addView(tv("Statistici inteligente pentru șoferi ridesharing", 13f, Ui.TEXT))
         statusView = tv("", 13f, Ui.MUTED)
         statusView.setPadding(dp(12), dp(6), dp(12), dp(6))
         statusView.background = Ui.rounded(Ui.SURFACE, dp(14).toFloat())
@@ -144,7 +144,7 @@ class MainActivity : Activity() {
         bolt.background = Ui.rounded(Ui.BRAND, dp(26).toFloat())
         bolt.setOnClickListener {
             if (!serviceEnabled()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            else Toast.makeText(this, "Activ – cardul apare automat în Bolt Driver", Toast.LENGTH_SHORT).show()
+            else Toast.makeText(this, "Activ – cardul apare automat în aplicația de ridesharing", Toast.LENGTH_SHORT).show()
         }
         val boltWrap = LinearLayout(this)
         boltWrap.gravity = Gravity.CENTER
@@ -217,7 +217,7 @@ class MainActivity : Activity() {
 
     private fun updateStatus() {
         if (serviceEnabled()) {
-            statusView.text = "●  Activ — cardul apare automat în Bolt Driver"
+            statusView.text = "●  Activ — cardul apare automat în aplicația de ridesharing"
             statusView.setTextColor(Ui.GREEN)
         } else {
             statusView.text = "●  Dezactivat — apasă aici și activează „DBX Pulse” la Accesibilitate"
@@ -316,7 +316,8 @@ class MainActivity : Activity() {
 
     // ---------- ISTORIC ----------
     private fun renderHistory() {
-        val rides = Store.history(this)
+        val all = Store.historyAll(this)           // lista arată și cursele anulate
+        val rides = all.filter { it.canceled == 0 } // AZI numără doar cursele valabile
         val cal = Calendar.getInstance()
         cal.set(Calendar.HOUR_OF_DAY, 0)
         cal.set(Calendar.MINUTE, 0)
@@ -330,15 +331,14 @@ class MainActivity : Activity() {
         accountCard()?.let { content.addView(it) }
         content.addView(summaryCard("AZI", today))
         content.addView(tipsCard())
-        content.addView(summaryCard("TOTAL", rides))
         content.addView(emptyKmCard(today, rides))
         content.addView(quickActions())
 
-        if (rides.isEmpty()) {
+        if (all.isEmpty()) {
             val c = card()
             c.addView(tv("Nicio cursă salvată încă.", 15f, Ui.TEXT, true))
             val hint = tv(
-                "Când apeși „Acceptă” în Bolt, cursa apare aici și cardul dispare. " +
+                "Când apeși „Acceptă” în aplicația de ridesharing, cursa apare aici și cardul dispare. " +
                     "Dacă nu se salvează singură, ține apăsat pe card ca s-o salvezi manual.",
                 13f, Ui.MUTED
             )
@@ -353,18 +353,20 @@ class MainActivity : Activity() {
         hd.gravity = Gravity.CENTER_VERTICAL
         hd.setPadding(0, dp(4), 0, dp(8))
         hd.addView(tv("Ultimele curse", 19f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        if (rides.size > 4) {
-            val all = tv(if (showAllRides) "Mai puține" else "Vezi toate →", 14f, Ui.BRAND, true)
-            all.setOnClickListener { showAllRides = !showAllRides; render() }
-            hd.addView(all)
+        if (all.size > 4) {
+            val allBtn = tv(if (showAllRides) "Mai puține" else "Vezi toate →", 14f, Ui.BRAND, true)
+            allBtn.setOnClickListener { showAllRides = !showAllRides; render() }
+            hd.addView(allBtn)
         }
         content.addView(hd)
-        for (r in rides.take(if (showAllRides) 200 else 4)) {
+        for (r in all.take(if (showAllRides) 200 else 4)) {
+            val cx = r.canceled > 0
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
             // cartonaș: fundal, contur în culoarea verdictului, spațiu între cartonașe
-            val edge = (Ui.levelColor(r.level) and 0x00FFFFFF) or 0x99000000.toInt()
+            val edge = ((if (cx) Ui.MUTED else Ui.levelColor(r.level)) and 0x00FFFFFF) or 0x99000000.toInt()
+            if (cx) row.alpha = 0.6f
             row.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat(), edge, dp(1))
             row.setPadding(dp(14), dp(14), dp(14), dp(14))
             val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -372,12 +374,13 @@ class MainActivity : Activity() {
             row.layoutParams = lp
 
             val dot = View(this)
-            dot.background = Ui.rounded(Ui.levelColor(r.level), dp(8).toFloat())
+            dot.background = Ui.rounded(if (cx) Ui.MUTED else Ui.levelColor(r.level), dp(8).toFloat())
             row.addView(dot, LinearLayout.LayoutParams(dp(14), dp(14)))
 
             val col = LinearLayout(this)
             col.orientation = LinearLayout.VERTICAL
             col.setPadding(dp(12), 0, 0, 0)
+            if (cx) col.addView(tv(if (r.canceled == 1) "ANULATĂ DE PASAGER · nu se numără" else "ANULATĂ DE TINE · nu se numără", 12f, Ui.AMBER, true))
             col.addView(tv(Fmt.d2(r.netPerKm) + " lei/km net  ·  " + Fmt.d1(r.totalKm) + " km", 16f, Ui.TEXT, true))
             col.addView(
                 tv(
@@ -388,7 +391,7 @@ class MainActivity : Activity() {
             )
             row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-            if (r.pay >= 0) {
+            if (r.pay >= 0 && !cx) {
                 val cash = r.pay == 1
                 val pc = if (cash) Ui.GREEN else Ui.BRAND
                 val badge = tv(if (cash) "CASH" else "CARD", 11f, pc, true)
@@ -401,13 +404,19 @@ class MainActivity : Activity() {
             }
 
             row.setOnLongClickListener {
+                val first = if (cx) "Refă cursa (o număr din nou)" else "Marchează ca anulată (nu se mai numără)"
                 AlertDialog.Builder(this)
-                    .setTitle("Ștergi cursa?")
-                    .setPositiveButton("Șterge") { _, _ ->
-                        Store.deleteRide(this, r.ts)
-                        render()
+                    .setTitle("Cursa din " + fmt.format(Date(r.ts)))
+                    .setItems(arrayOf(first, "Șterge definitiv", "Închide")) { _, which ->
+                        if (which == 0) { if (cx) Store.restoreRide(this, r.ts) else Store.cancelRide(this, r.ts, 2); render() }
+                        else if (which == 1) {
+                            AlertDialog.Builder(this)
+                                .setTitle("Ștergi definitiv cursa?")
+                                .setPositiveButton("Șterge") { _, _ -> Store.deleteRide(this, r.ts); render() }
+                                .setNegativeButton("Nu", null)
+                                .show()
+                        }
                     }
-                    .setNegativeButton("Anulează", null)
                     .show()
                 true
             }
@@ -432,21 +441,11 @@ class MainActivity : Activity() {
 
     private fun summaryCard(title: String, rides: List<Ride>): LinearLayout {
         val c = card()
-        val dateTxt = if (title == "AZI") SimpleDateFormat("d MMMM yyyy", Locale.forLanguageTag("ro-RO")).format(Date()) else "toate cursele"
+        val dateTxt = SimpleDateFormat("d MMMM yyyy", Locale.forLanguageTag("ro-RO")).format(Date())
         val head = LinearLayout(this)
         head.gravity = Gravity.CENTER_VERTICAL
         head.addView(tv(title, 17f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(tv(dateTxt, 12f, Ui.MUTED))
-        if (title == "TOTAL") {
-            val rs = tv("  Resetează", 13f, Ui.RED, true)
-            rs.setOnClickListener {
-                AlertDialog.Builder(this).setTitle("Resetezi TOTAL?")
-                    .setMessage("Se șterg toate cursele din istoric și TOTAL revine la 0. AZI se resetează singur la ora 00:00.")
-                    .setPositiveButton("Resetează") { _, _ -> Store.clearHistory(this); render() }
-                    .setNegativeButton("Anulează", null).show()
-            }
-            head.addView(rs)
-        }
         c.addView(head)
         val net = rides.sumOf { it.net }
         val km = rides.sumOf { it.totalKm }
@@ -508,13 +507,10 @@ class MainActivity : Activity() {
         c.addView(tv("KM ÎN GOL (fără cursă)", 12f, Ui.MUTED, true))
         val r = LinearLayout(this)
         r.setPadding(0, dp(8), 0, 0)
-        val l1 = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = dp(4)
-        val l2 = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); l2.leftMargin = dp(4)
-        r.addView(statTile(R.drawable.ic_st_cal, "Azi", Fmt.d1(Store.emptyToday(this)) + " km"), l1)
-        r.addView(statTile(R.drawable.ic_st_sum, "Total", Fmt.d1(Store.emptyTotal(this)) + " km"), l2)
+        r.addView(statTile(R.drawable.ic_st_cal, "Azi", Fmt.d1(Store.emptyToday(this)) + " km"), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         c.addView(r)
         val on = Store.shiftOn(this)
-        c.addView(tv(if (on) "Tură pornită — se numără km în gol cât Bolt e deschis." else "Tură oprită — km rămân salvați, se continuă de unde au rămas.", 12f, if (on) Ui.GREEN else Ui.AMBER))
+        c.addView(tv(if (on) "Tură pornită — se numără km în gol cât aplicația de ridesharing e deschisă." else "Tură oprită — km rămân salvați, se continuă de unde au rămas.", 12f, if (on) Ui.GREEN else Ui.AMBER))
         c.addView(button(if (on) "Oprește tura" else "Pornește tura") { Store.setShift(this, !on); render() })
         val trk = Store.trackedToday(this)
         val inRide = maxOf(0.0, trk - Store.emptyToday(this))
@@ -926,7 +922,7 @@ class MainActivity : Activity() {
         if (!Geo.hasBackground(this)) {
             val c = card()
             c.addView(tv("LOCAȚIE ÎN FUNDAL", 12f, Ui.MUTED, true))
-            c.addView(tv("Ca să salvez locația și când ești în Bolt, deschide Permisiuni → Locație și alege „Permite tot timpul”.", 13f, Ui.TEXT))
+            c.addView(tv("Ca să salvez locația și când ești în aplicația de ridesharing, deschide Permisiuni → Locație și alege „Permite tot timpul”.", 13f, Ui.TEXT))
             c.addView(button("Deschide setările aplicației") {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             })
@@ -944,7 +940,7 @@ class MainActivity : Activity() {
         if (events.sumOf { it.weight } < 10 || zones.isEmpty()) {
             val c = card()
             c.addView(tv("Adun date…", 15f, Ui.TEXT, true))
-            c.addView(tv("Am ${events.sumOf { it.weight }} puncte cu locație. Recomandările apar după ~10 oferte sau curse. Lucrează normal cu Bolt deschis, iar eu notez de unde vin ofertele.", 13f, Ui.MUTED))
+            c.addView(tv("Am ${events.sumOf { it.weight }} puncte cu locație. Recomandările apar după ~10 oferte sau curse. Lucrează normal cu aplicația de ridesharing deschisă, iar eu notez de unde vin ofertele.", 13f, Ui.MUTED))
             content.addView(c)
             addZoneData(events)
             return
@@ -1151,14 +1147,14 @@ class MainActivity : Activity() {
         val until = Cloud.accessUntil(this)
         val days = if (Cloud.isUnlimited(this) || until <= 0L) 0 else Math.ceil((until - System.currentTimeMillis()) / 86400000.0).toInt()
         val msg = (if (days > 0) "Ai $days zile gratuite, apoi 19,9 lei pe lună. " else "") +
-            "Primul pas: activează serviciul de accesibilitate, ca să apară cardul peste Bolt. Ghidul te duce pas cu pas."
+            "Primul pas: activează serviciul de accesibilitate, ca să apară cardul peste aplicația de ridesharing. Ghidul te duce pas cu pas."
         AlertDialog.Builder(this).setTitle("Bun venit în DBX Pulse!").setMessage(msg)
             .setPositiveButton("Deschide ghidul") { _, _ -> showGuide = true; render() }
             .setNegativeButton("Mai târziu", null).show()
     }
 
     private val guideSteps = listOf(
-        Triple(R.drawable.guide_01, "Deschide Accesibilitate și alege DBX Pulse", "Intră în Setări → Funcții de accesibilitate → Servicii descărcate. Apasă pe DBX Pulse. Aici se pornește serviciul care citește oferta din Bolt Driver și afișează cardul."),
+        Triple(R.drawable.guide_01, "Deschide Accesibilitate și alege DBX Pulse", "Intră în Setări → Funcții de accesibilitate → Servicii descărcate. Apasă pe DBX Pulse. Aici se pornește serviciul care citește oferta din aplicația de ridesharing și afișează cardul."),
         Triple(R.drawable.guide_02, "Comutatorul e gri", "Scrie „Controlat prin setare restricționată”. E normal: Android blochează serviciile din aplicațiile instalate din afara magazinului Play. Apasă pe comutator."),
         Triple(R.drawable.guide_03, "Mesajul „Accesul aplicației a fost refuzat”", "Apasă Închide. Aplicația nu e stricată: trebuie doar să ridici restricția din informațiile aplicației, în pașii următori."),
         Triple(R.drawable.guide_04, "Deschide Setări", "Caută „Setări” din căutarea telefonului sau apasă iconița cu rotița. Meniurile diferă puțin între mărci, dar pașii sunt aceiași."),
@@ -1167,9 +1163,9 @@ class MainActivity : Activity() {
         Triple(R.drawable.guide_07, "Alege DBX Pulse din listă", "Derulează la litera D sau folosește căutarea de sus și apasă pe DBX Pulse."),
         Triple(R.drawable.guide_08, "Îndepărtează restricția", "Sus apare un banner roșu: „Aplicația a fost restricționată”. Apasă pe „Îndepărtați restricția”. Pe alte telefoane (Android 13 sau mai nou): apeși cele trei puncte din colț și alegi „Permite setări restricționate”. Poate cere PIN sau amprentă."),
         Triple(R.drawable.guide_09, "Restricția a fost anulată", "Apare mesajul „Restricționarea aplicației a fost anulată”. Acum apasă pe Permisiuni."),
-        Triple(R.drawable.guide_10, "Dă permisiunile", "Apasă pe Locație și alege „Permite tot timpul”, ca aplicația să măsoare km și zonele și când Bolt e deschis. Apasă pe Notificări și permite-le, pentru remindere. Recomand și să oprești comutatorul de jos, „Gestionează aplicația dacă nu e folosită”, ca Android să nu-ți ia permisiunile."),
+        Triple(R.drawable.guide_10, "Dă permisiunile", "Apasă pe Locație și alege „Permite tot timpul”, ca aplicația să măsoare km și zonele și când aplicația de ridesharing e deschisă. Apasă pe Notificări și permite-le, pentru remindere. Recomand și să oprești comutatorul de jos, „Gestionează aplicația dacă nu e folosită”, ca Android să nu-ți ia permisiunile."),
         Triple(R.drawable.guide_11, "Pornește serviciul de accesibilitate", "Întoarce-te în Accesibilitate → DBX Pulse și apasă pe comutator. Apare fereastra „Utilizați DBX Pulse”: apasă OK."),
-        Triple(R.drawable.guide_12, "Gata: „Activ”", "În aplicație, sub titlu, trebuie să scrie „Activ — cardul apare automat în Bolt Driver”. Deschide Bolt Driver; la prima ofertă apare cardul.")
+        Triple(R.drawable.guide_12, "Gata: „Activ”", "În aplicație, sub titlu, trebuie să scrie „Activ — cardul apare automat în aplicația de ridesharing”. Deschide aplicația de ridesharing; la prima ofertă apare cardul.")
     )
 
     private fun renderGuide() {
@@ -1222,7 +1218,7 @@ class MainActivity : Activity() {
         val pulse = tv("Pulse", 38f, Ui.BRAND, true)
         pulse.setTypeface(pulse.typeface, Typeface.BOLD_ITALIC)
         col.addView(pulse)
-        val tag = tv("Statistici inteligente\npentru șoferi Bolt", 17f, Ui.TEXT)
+        val tag = tv("Statistici inteligente\npentru șoferi ridesharing", 17f, Ui.TEXT)
         tag.gravity = Gravity.CENTER
         tag.setPadding(0, dp(12), 0, dp(8))
         col.addView(tag)
@@ -1603,15 +1599,15 @@ class MainActivity : Activity() {
         asp.addView(chips)
         content.addView(asp)
         val au = scard()
-        au.addView(tv("ALERTE ȘI CARD PESTE BOLT", 13f, Ui.BRAND, true))
-        au.addView(tv("Când se salvează o cursă: doar după ce Bolt ți-o atribuie (apare ecranul cursei active). Nu se salvează ofertele respinse, cele luate de alt șofer, cele anulate de pasager sau anulate de tine.", 13f, Ui.TEXT))
+        au.addView(tv("ALERTE ȘI CARD PESTE APLICAȚIA DE RIDESHARING", 13f, Ui.BRAND, true))
+        au.addView(tv("Când se salvează o cursă: doar după ce platforma ți-o atribuie (apare ecranul cursei active). Nu se salvează ofertele respinse, cele luate de alt șofer, cele anulate de pasager sau anulate de tine.", 13f, Ui.TEXT))
         val alOn = Store.raw(this, "alert_top") != "0"
         au.addView(button(if (alOn) "Alertă „DE NERATAT” (vibrație + sunet): PORNITĂ" else "Alertă „DE NERATAT”: OPRITĂ") {
             Store.setRaw(this, "alert_top", if (alOn) "0" else "1")
             render()
         })
         val ptOn = Store.raw(this, "pass_touch") != "0"
-        au.addView(tv("Cardul peste Bolt: " + (if (ptOn) "lasă atingerea să treacă prin el, deci poți apăsa „Refuză” sau „Acceptă” sub card. Apăsarea lungă pe card nu mai merge." else "prinde atingerea; apăsarea lungă pe card salvează cursa manual, dar poate acoperi butoanele Bolt."), 13f, Ui.TEXT))
+        au.addView(tv("Cardul peste aplicația de ridesharing: " + (if (ptOn) "lasă atingerea să treacă prin el, deci poți apăsa „Refuză” sau „Acceptă” sub card. Apăsarea lungă pe card nu mai merge." else "prinde atingerea; apăsarea lungă pe card salvează cursa manual, dar poate acoperi butoanele din aplicația de ridesharing."), 13f, Ui.TEXT))
         au.addView(button(if (ptOn) "Atingere prin card: PORNITĂ — apasă ca s-o oprești" else "Atingere prin card: OPRITĂ — apasă ca s-o pornești") {
             Store.setRaw(this, "pass_touch", if (ptOn) "0" else "1")
             render()
@@ -1621,16 +1617,39 @@ class MainActivity : Activity() {
         // diagnostic
         val diag = scard()
         diag.addView(tv("DIAGNOSTIC", 13f, Ui.BRAND, true))
+        diag.addView(tv("Apasă butonul ca să faci un fișier .txt cu tot ce trebuie (versiune, setări, ultimele curse, jurnal de evenimente, ultimul ecran din aplicația de ridesharing) și să-l trimiți pe WhatsApp sau email.", 12f, Ui.MUTED))
+        diag.addView(button("Generează diagnostic (fișier .txt)") {
+            try { Diag.share(this) } catch (e: Exception) { Toast.makeText(this, "Nu am putut crea fișierul.", Toast.LENGTH_LONG).show() }
+        })
+        diag.addView(button("Copiază textul diagnosticului") {
+            try {
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("DBX Pulse diagnostic", Diag.build(this)))
+                Toast.makeText(this, "Copiat. Lipește-l într-un mesaj.", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) { Toast.makeText(this, "Nu am putut copia.", Toast.LENGTH_LONG).show() }
+        })
         val d = Store.dump(this)
         val dv = tv(
-            if (d.isEmpty()) "Încă nu am citit nimic din Bolt. Deschide o ofertă cu serviciul activ."
-            else "Ultimul text citat din Bolt:\n\n" + d,
+            if (d.isEmpty()) "Încă nu am citit nimic din aplicația de ridesharing. Deschide o ofertă cu serviciul activ."
+            else "Ultimul text citat din aplicația de ridesharing:\n\n" + d,
             12f, Ui.MUTED
         )
         dv.setTextIsSelectable(true)
         dv.setPadding(0, dp(6), 0, 0)
         diag.addView(dv)
         content.addView(diag)
+
+        val dt = scard()
+        dt.addView(tv("DATE", 13f, Ui.BRAND, true))
+        dt.addView(tv("Șterge toate cursele salvate pe acest telefon. Nu se poate anula.", 12f, Ui.MUTED))
+        val del = button("Șterge tot istoricul de curse") {
+            AlertDialog.Builder(this).setTitle("Ștergi tot istoricul?")
+                .setMessage("Se șterg toate cursele (și cele marcate anulate) și kilometrii în gol. Nu se poate anula.")
+                .setPositiveButton("Șterge tot") { _, _ -> Store.clearHistory(this); render() }
+                .setNegativeButton("Nu", null).show()
+        }
+        dt.addView(del)
+        content.addView(dt)
     }
 
     private fun numberField(initial: String, onChange: (String) -> Unit): EditText {

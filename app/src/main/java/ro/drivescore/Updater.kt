@@ -133,21 +133,26 @@ object Updater {
     }
 }
 
-/** Dă instalatorului Android acces la APK-ul descărcat (fără bibliotecă FileProvider). */
+/** Dă altor aplicații acces la fișiere create de noi: APK-ul descărcat (instalare) și raportul de diagnostic (trimitere). */
 class UpdateProvider : ContentProvider() {
+    private fun target(uri: Uri): File {
+        val c = context!!
+        return if (uri.lastPathSegment == "dbx-diagnostic.txt") Diag.file(c) else Updater.apkFile(c)
+    }
     override fun onCreate() = true
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        val f = Updater.apkFile(context!!)
+        val f = target(uri)
         if (!f.exists()) throw FileNotFoundException()
         return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
     }
     override fun query(u: Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): Cursor {
-        val f = Updater.apkFile(context!!)
+        val f = target(u)
         val cur = MatrixCursor(arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE))
-        cur.addRow(arrayOf<Any>("dbx-pulse.apk", f.length()))
+        cur.addRow(arrayOf<Any>(f.name, f.length()))
         return cur
     }
-    override fun getType(u: Uri): String = "application/vnd.android.package-archive"
+    override fun getType(u: Uri): String =
+        if (u.lastPathSegment == "dbx-diagnostic.txt") "text/plain" else "application/vnd.android.package-archive"
     override fun insert(u: Uri, v: ContentValues?): Uri? = null
     override fun delete(u: Uri, s: String?, a: Array<out String>?) = 0
     override fun update(u: Uri, v: ContentValues?, s: String?, a: Array<out String>?) = 0
