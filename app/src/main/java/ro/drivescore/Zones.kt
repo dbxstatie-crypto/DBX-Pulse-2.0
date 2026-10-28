@@ -19,7 +19,7 @@ data class GeoEvent(
     val own: Boolean = false
 )
 
-/** O zonă (celulă ~550 m) cu scorul ei. */
+/** O zonă (celulă ~500 m) cu scorul ei. */
 data class Zone(
     val lat: Double,
     val lon: Double,
@@ -33,9 +33,11 @@ data class Zone(
 )
 
 object Zones {
-    const val CELL_DEG = 0.005       // ~556 m pe latitudine
-    const val LON_STEP = 0.0072      // ~560 m pe longitudine la latitudinea României
+    const val CELL_DEG = 0.0045      // ~500 m pe latitudine
+    const val LON_STEP = 0.0064      // ~500 m pe longitudine la latitudinea României
     private const val MIN_TIME_MASS = 10.0
+    private const val SPREAD_SIDE = 0.2   // cât se „împrăștie” o ofertă în celulele vecine (pe laturi)
+    private const val SPREAD_DIAG = 0.05  // și pe diagonală: cu cât mai mic, cu atât zonele rămân separate
 
     class Analysis(
         val zones: List<Zone>,
@@ -103,7 +105,7 @@ object Zones {
             val j = floor(e.lon / LON_STEP).toInt()
             val npk = e.netPerKm
             for (di in -1..1) for (dj in -1..1) {
-                val k = if (di == 0 && dj == 0) 1.0 else if (di == 0 || dj == 0) 0.35 else 0.15
+                val k = if (di == 0 && dj == 0) 1.0 else if (di == 0 || dj == 0) SPREAD_SIDE else SPREAD_DIAG
                 val a = cells.getOrPut("${i + di}:${j + dj}") { Acc() }
                 if (e.kind == 1) a.sr += w * k else a.so += w * k
                 if (!npk.isNaN() && npk > 0) {
@@ -159,6 +161,15 @@ object Zones {
         }
         zones.sortByDescending { it.score }
         return Analysis(zones, cLat, cLon, timeMass >= MIN_TIME_MASS, LON_STEP, g)
+    }
+
+    /** Elimină zonele lipite de una deja aleasă (mai bună), ca „Centru” și vecinul lui să nu apară ca două zone aproape identice. */
+    fun distinct(zones: List<Zone>, minKm: Double = 0.8): List<Zone> {
+        val out = ArrayList<Zone>()
+        for (z in zones) {
+            if (out.none { Geo.distKm(it.lat, it.lon, z.lat, z.lon) < minKm }) out.add(z)
+        }
+        return out
     }
 
     /** Nume real al zonei (cartier/localitate) dacă l-am aflat, altfel „Centru” sau direcția. */

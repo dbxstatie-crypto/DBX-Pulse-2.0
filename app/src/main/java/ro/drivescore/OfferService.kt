@@ -422,6 +422,7 @@ class OfferService : AccessibilityService() {
 
     private fun hideCard() {
         val c = card
+        c?.stopAlert()
         if (shown && c != null) {
             try {
                 wm?.removeView(c.view)

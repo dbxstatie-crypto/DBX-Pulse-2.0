@@ -22,6 +22,8 @@ import java.util.concurrent.Executors
 object Cloud {
     /** false = oricine își face cont și intră direct; true = doar cu cod de invitație (vezi update_invitatii.sql). */
     const val REQUIRE_INVITE = true
+    /** Pagina „Email confirmat” (confirmat.html), setată după ce o pui online; trebuie adăugată și în Supabase → Redirect URLs. */
+    const val CONFIRM_URL = ""
     const val BASE_URL = "https://odbwfbjznpwvqygcxfqq.supabase.co"
     const val PUBLISHABLE_KEY = "sb_publishable_KSP4DRasJwVdiisAQJBd_Q_CvCO8khc"   // sb_publishable_... (cheia publică)
 
@@ -114,7 +116,7 @@ object Cloud {
             var msg: String
             try {
                 val body = JSONObject().put("email", email.trim()).put("password", password).toString()
-                val r = if (create) call("POST", "/auth/v1/signup", body, null)
+                val r = if (create) call("POST", "/auth/v1/signup" + (if (CONFIRM_URL.isNotEmpty()) "?redirect_to=" + java.net.URLEncoder.encode(CONFIRM_URL, "UTF-8") else ""), body, null)
                 else call("POST", "/auth/v1/token?grant_type=password", body, null)
                 if (r.code !in 200..299) {
                     msg = authError(r)
@@ -160,13 +162,13 @@ object Cloud {
             // cont nou cu cod de invitație dat la înregistrare
             val code = (Store.raw(c, "pending_code") ?: "").trim()
             val nick = (Store.raw(c, "pending_nick") ?: "").trim()
-            Store.setRaw(c, "pending_code", "")
-            Store.setRaw(c, "pending_nick", "")
             if (!REQUIRE_INVITE) {
+                Store.setRaw(c, "pending_code", ""); Store.setRaw(c, "pending_nick", "")
                 val nm0 = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
                 val jr0 = call("POST", "/rest/v1/rpc/join_community", JSONObject().put("p_name", nm0).toString(), tok)
                 if (jr0.code in 200..299) restoreMembership(c)
             } else if (code.isNotEmpty()) {
+                Store.setRaw(c, "pending_code", ""); Store.setRaw(c, "pending_nick", "")
                 val nm = nick.ifEmpty { (Store.raw(c, "cloud_email") ?: "").substringBefore('@') }.take(40).ifEmpty { "Utilizator" }
                 val jr = call("POST", "/rest/v1/rpc/redeem_invite", JSONObject().put("p_code", code).put("p_name", nm).toString(), tok)
                 if (jr.code in 200..299) restoreMembership(c)

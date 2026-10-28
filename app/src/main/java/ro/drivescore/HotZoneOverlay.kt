@@ -52,7 +52,7 @@ class HotZoneOverlay(
         for (z in zones.sortedBy { it.score }) {   // cele mai fierbinți se desenează ultimele
             val norm = if (top > 0) (z.score / top).coerceIn(0.0, 1.0).toFloat() else 0f
             val center = proj.toPixels(GeoPoint(z.lat, z.lon), Point())
-            val meters = 220.0 + 380.0 * norm
+            val meters = 120.0 + 130.0 * norm   // diametru 240–500 m, cât o celulă
             val edge = proj.toPixels(GeoPoint(z.lat + meters / 111320.0, z.lon), Point())
             val r = abs(center.y - edge.y).toFloat().coerceAtLeast(7f * d)
             val cx = center.x.toFloat()
