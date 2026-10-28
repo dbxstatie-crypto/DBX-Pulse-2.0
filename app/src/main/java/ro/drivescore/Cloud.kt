@@ -23,7 +23,7 @@ object Cloud {
     /** false = oricine își face cont și intră direct; true = doar cu cod de invitație (vezi update_invitatii.sql). */
     const val REQUIRE_INVITE = true
     /** Pagina „Email confirmat” (confirmat.html), setată după ce o pui online; trebuie adăugată și în Supabase → Redirect URLs. */
-    const val CONFIRM_URL = ""
+    const val CONFIRM_URL = "https://dbxpulse.netlify.app/confirmat.html"
     const val BASE_URL = "https://odbwfbjznpwvqygcxfqq.supabase.co"
     const val PUBLISHABLE_KEY = "sb_publishable_KSP4DRasJwVdiisAQJBd_Q_CvCO8khc"   // sb_publishable_... (cheia publică)
 
@@ -143,7 +143,7 @@ object Cloud {
     private fun restoreMembership(c: Context) {
         val tok = token(c) ?: return
         val uid = Store.raw(c, "cloud_uid") ?: return
-        val r = call("GET", "/rest/v1/members?select=name,role,unlimited,access_until&user_id=eq.$uid", null, tok)
+        val r = call("GET", "/rest/v1/members?select=name,role,unlimited,access_until,spins&user_id=eq.$uid", null, tok)
         if (r.code !in 200..299) return
         val a = JSONArray(r.body)
         if (a.length() > 0) {
@@ -157,6 +157,7 @@ object Cloud {
                 try { until = java.time.OffsetDateTime.parse(o.getString("access_until")).toInstant().toEpochMilli() } catch (e: Exception) { }
             }
             Store.setRaw(c, "cloud_until", until.toString())
+            Store.setRaw(c, "cloud_spins", o.optInt("spins", 0).toString())
         } else {
             Store.setRaw(c, "cloud_member", "")
             // cont nou cu cod de invitație dat la înregistrare
@@ -231,6 +232,62 @@ object Cloud {
         }
     }
 
+    /** Schimbă numele afișat al contului (doar al tău; serverul verifică contul). */
+    fun rename(ctx: Context, name: String, done: (Boolean, String) -> Unit) {
+        val c = ctx.applicationContext
+        val n = name.trim().take(40)
+        if (n.length < 2) { done(false, "Numele e prea scurt."); return }
+        rpc(ctx, "rename_me", JSONObject().put("p_name", n)) { r, m ->
+            if (r != null) { Store.setRaw(c, "cloud_name", n); done(true, "Nume schimbat.") } else done(false, m)
+        }
+    }
+
+    /** Doar admin (serverul refuză pe oricine altcineva): șterge TOATE evenimentele de zone din comunitate. */
+    fun adminClearEvents(ctx: Context, done: (Boolean, String) -> Unit) {
+        val c = ctx.applicationContext
+        exec.execute {
+            var ok = false
+            var msg: String
+            try {
+                val tok = token(c)
+                if (tok == null) msg = "Nu ești conectat."
+                else {
+                    val r = call("DELETE", "/rest/v1/events?ts=gte.0", null, tok)
+                    if (r.code in 200..299) { ok = true; msg = "Datele de zone din comunitate au fost șterse." } else msg = "Nu ai voie sau eroare ${r.code}."
+                }
+            } catch (e: Exception) { msg = "Fără internet." }
+            main.post { done(ok, msg) }
+        }
+    }
+
+    fun spins(c: Context): Int = Store.raw(c, "cloud_spins")?.toIntOrNull() ?: 0
+
+    /** Roata: câte învârtiri ai, codul tău de prieten și prietenii aduși (totul vine de la server). */
+    fun wheel(ctx: Context, done: (JSONObject?, String) -> Unit) {
+        val c = ctx.applicationContext
+        rpc(ctx, "my_wheel", JSONObject()) { r, m ->
+            if (r == null) done(null, m)
+            else try {
+                val o = JSONObject(r)
+                Store.setRaw(c, "cloud_spins", o.optInt("spins", 0).toString())
+                done(o, "ok")
+            } catch (e: Exception) { done(null, "Răspuns neașteptat.") }
+        }
+    }
+
+    /** O învârtire: premiul îl alege serverul (nu telefonul). */
+    fun spin(ctx: Context, done: (JSONObject?, String) -> Unit) {
+        val c = ctx.applicationContext
+        rpc(ctx, "spin", JSONObject()) { r, m ->
+            if (r == null) done(null, m)
+            else try {
+                val o = JSONObject(r)
+                Store.setRaw(c, "cloud_spins", o.optInt("spins_left", 0).toString())
+                done(o, "ok")
+            } catch (e: Exception) { done(null, "Răspuns neașteptat.") }
+        }
+    }
+
     /** Utilizatorul spune „Am plătit”: cererea ajunge la admin. */
     fun requestPayment(ctx: Context, done: (Boolean, String) -> Unit) =
         rpc(ctx, "request_payment", JSONObject()) { r, m -> done(r != null, m) }
@@ -277,7 +334,7 @@ object Cloud {
     /** Ieșire din cont pe acest telefon (datele din cloud rămân). */
     fun logout(c: Context) {
         for (k in listOf("cloud_access", "cloud_refresh", "cloud_exp", "cloud_email", "cloud_member", "cloud_name",
-            "cloud_role", "cloud_synced_ts", "community", "cloud_status", "cloud_unl", "cloud_until", "join_error")) Store.setRaw(c, k, "")
+            "cloud_role", "cloud_synced_ts", "community", "cloud_status", "cloud_unl", "cloud_until", "cloud_spins", "join_error")) Store.setRaw(c, k, "")
     }
 
     // ---------- intrare / ieșire ----------

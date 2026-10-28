@@ -3,6 +3,7 @@ package ro.drivescore
 import android.app.Activity
 import android.Manifest
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -262,6 +263,8 @@ class MainActivity : Activity() {
             6 -> renderRides()
             7 -> renderMore()
             8 -> renderAppearance()
+            9 -> renderWheel()
+            10 -> renderFriends()
             1 -> renderZones()
             3 -> renderDocs()
             4 -> renderExpenses()
@@ -338,6 +341,7 @@ class MainActivity : Activity() {
 
         content.addView(homeHero())
         accessCard()?.let { content.addView(it) }
+        homeWheelCard()?.let { content.addView(it) }
 
         // profit azi
         val c = card()
@@ -1111,7 +1115,7 @@ class MainActivity : Activity() {
         map.setTileSource(TileSourceFactory.MAPNIK)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-        if (!Ui.light) map.overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS)   // hartă întunecată doar în tema întunecată
+        // harta rămâne cu culorile normale în orice temă (inversarea o făcea urâtă)
         map.controller.setZoom(13.5)
         map.controller.setCenter(GeoPoint(me?.first ?: an.centerLat, me?.second ?: an.centerLon))
         map.overlays.add(HotZoneOverlay(zones.take(25), top, me) { z ->
@@ -1210,13 +1214,35 @@ class MainActivity : Activity() {
         val o = events.filter { it.kind == 0 }.sumOf { it.weight }
         val r = events.filter { it.kind == 1 }.sumOf { it.weight }
         c.addView(tv("$o oferte văzute, $r curse acceptate cu locație (tu + comunitatea)", 13f, Ui.TEXT))
-        c.addView(button("Șterge datele de zone (oferte văzute)") {
+        c.addView(button("Șterge doar datele mele de zone") {
             AlertDialog.Builder(this)
-                .setMessage("Ștergi ofertele văzute folosite pentru zone? Cursele din istoric rămân.")
+                .setMessage("Ștergi ofertele văzute de pe telefonul tău, folosite pentru zone? Datele celorlalți șoferi (comunitatea) și cursele din istoric rămân.")
                 .setPositiveButton("Șterge") { _, _ -> Store.clearOffers(this); render() }
                 .setNegativeButton("Anulează", null)
                 .show()
         })
+        if (Cloud.role(this) == "admin") {
+            val adm = button("Admin: șterge datele de zone ale comunității") {
+                AlertDialog.Builder(this)
+                    .setTitle("Ștergi datele tuturor șoferilor?")
+                    .setMessage("Se șterg din cloud toate ofertele și cursele cu locație ale TUTUROR utilizatorilor. Nu se poate anula.")
+                    .setPositiveButton("Continuă") { _, _ ->
+                        AlertDialog.Builder(this)
+                            .setTitle("Ești sigur?")
+                            .setMessage("Ultima confirmare: ștergi datele de zone ale comunității.")
+                            .setPositiveButton("Șterge tot") { _, _ ->
+                                Cloud.adminClearEvents(this) { ok, msg ->
+                                    if (ok) Cloud.syncAsync(this, true) { }
+                                    refreshAfter(msg)
+                                }
+                            }
+                            .setNegativeButton("Nu", null).show()
+                    }
+                    .setNegativeButton("Anulează", null).show()
+            }
+            adm.background = Ui.rounded(Ui.RED, dp(16).toFloat())
+            c.addView(adm)
+        }
         content.addView(c)
         renderCloudCard()
     }
@@ -1244,6 +1270,7 @@ class MainActivity : Activity() {
 
     private val CONTACT_EMAIL = "alexdbx89@gmail.com"
     private val CONTACT_WA = "40750209081"
+    private val SITE_URL = "https://dbxpulse.netlify.app"
 
     private fun copyEmail() {
         (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(ClipData.newPlainText("email", CONTACT_EMAIL))
@@ -1344,19 +1371,19 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (showGuide) { showGuide = false; render() } else if (tab == 2 || tab == 3 || tab == 5 || tab == 8) { tab = 7; render() } else if (tab != 0) { tab = 0; render() } else super.onBackPressed()
+        if (showGuide) { showGuide = false; render() } else if (tab == 10) { tab = 9; render() } else if (tab == 2 || tab == 3 || tab == 5 || tab == 8 || tab == 9) { tab = 7; render() } else if (tab != 0) { tab = 0; render() } else super.onBackPressed()
     }
 
     private fun renderJoin() {
         content.addView(authHero(R.drawable.home_hero, 150))
         val c = card()
         c.addView(tv("Mai ai un pas", 22f, Ui.TEXT, true))
-        c.addView(tv("Salut, " + displayName() + "! Emailul tău e confirmat. Scrie codul de invitație primit de la administrator ca să intri în aplicație.", 13f, Ui.MUTED))
+        c.addView(tv("Salut, " + displayName() + "! Emailul tău e confirmat. Scrie codul de invitație primit de la administrator sau codul unui prieten care folosește deja aplicația.", 13f, Ui.MUTED))
         val err = Store.raw(this, "join_error") ?: ""
         if (err.isNotEmpty()) c.addView(tv(err, 13f, Ui.RED, true))
         val nameF = textField("Numele sau nickname-ul tău", false)
         nameF.setText(Store.raw(this, "pending_nick") ?: "")
-        val codeF = textField("Cod de invitație", false)
+        val codeF = textField("Cod de invitație sau cod de prieten", false)
         c.addView(codeF)
         c.addView(nameF)
         c.addView(button("Intru în aplicație") {
@@ -1619,6 +1646,237 @@ class MainActivity : Activity() {
         content.addView(ec)
     }
 
+    // ---------- ROATA NOROCULUI ----------
+    private fun roDate(iso: String?): String {
+        if (iso.isNullOrEmpty() || iso == "null") return "—"
+        return try {
+            val ms = java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli()
+            SimpleDateFormat("d MMMM yyyy", Locale.forLanguageTag("ro-RO")).format(Date(ms))
+        } catch (e: Exception) { "—" }
+    }
+
+    private fun wheelRules() {
+        val t = "ȘANSE (la fiecare învârtire)\n" +
+            "• Mai încearcă: 60%\n• +1 zi: 25%\n• +3 zile: 10%\n• +7 zile: 3%\n• +30 de zile: 2%\n\n" +
+            "CUM CÂȘTIGI ÎNVÂRTIRI\n" +
+            "• 1 învârtire când plata ta lunară e confirmată\n" +
+            "• 1 învârtire când un prieten invitat de tine are prima plată confirmată (o dată per prieten)\n" +
+            "• 1 învârtire de bun venit, la crearea contului\n\n" +
+            "REGULI\n" +
+            "• Rezultatul îl alege serverul, nu telefonul.\n" +
+            "• Zilele câștigate se adaugă peste accesul pe care îl ai deja.\n" +
+            "• Se câștigă doar zile de acces, nu bani.\n" +
+            "• Premiul de +30 de zile se poate da de cel mult 2 ori pe lună în toată comunitatea; dacă s-a epuizat, premiul devine +7 zile.\n" +
+            "• Învârtirile nefolosite rămân în contul tău.\n" +
+            "• DBX Pulse poate modifica regulile; se aplică cele din versiunea curentă a aplicației."
+        android.app.AlertDialog.Builder(this).setTitle("Șanse și regulament").setMessage(t).setPositiveButton("Am înțeles", null).show()
+    }
+
+    /** Cardul de pe Acasă: apare doar când ai cel puțin o învârtire. */
+    private fun homeWheelCard(): LinearLayout? {
+        val n = Cloud.spins(this)
+        if (n <= 0 || !Cloud.joined(this)) return null
+        val r = LinearLayout(this)
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.background = Ui.rounded(Ui.ACCENT, dp(18).toFloat())
+        r.setPadding(dp(16), dp(14), dp(14), dp(14))
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.addView(tv("ROATA NOROCULUI", 11f, Ui.ON_ACCENT, true))
+        col.addView(tv(if (n == 1) "Ai 1 învârtire!" else "Ai $n învârtiri!", 18f, Ui.ON_ACCENT, true))
+        col.addView(tv("Poți câștiga până la 30 de zile", 12f, Ui.ON_ACCENT))
+        r.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val b = tv("Învârte", 13f, Ui.ACCENT, true)
+        b.gravity = Gravity.CENTER
+        b.setPadding(dp(16), dp(9), dp(16), dp(9))
+        b.background = Ui.rounded(Ui.ON_ACCENT, dp(20).toFloat())
+        r.addView(b)
+        r.setOnClickListener { tab = 9; render() }
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.bottomMargin = dp(12)
+        r.layoutParams = lp
+        return r
+    }
+
+    private fun renderWheel() {
+        content.addView(pageHeader("Mai mult", "Roata norocului", { tab = 7; render() }))
+        val sc = card()
+        val spinsT = tv(if (Cloud.spins(this) == 1) "Ai 1 învârtire" else "Ai ${Cloud.spins(this)} învârtiri", 16f, Ui.TEXT, true)
+        sc.addView(spinsT)
+        sc.addView(tv("Se adună din lunile plătite, prieteni și bun venit.", 12f, Ui.MUTED))
+        content.addView(sc)
+
+        val resultBox = LinearLayout(this)
+        resultBox.orientation = LinearLayout.VERTICAL
+        content.addView(resultBox)
+
+        val wheel = WheelView(this)
+        val wlp = LinearLayout.LayoutParams(dp(300), LinearLayout.LayoutParams.WRAP_CONTENT)
+        wlp.gravity = Gravity.CENTER_HORIZONTAL
+        wlp.topMargin = dp(6)
+        content.addView(wheel, wlp)
+
+        lateinit var btn: TextView
+        fun setSpinsText(n: Int) {
+            spinsT.text = if (n == 1) "Ai 1 învârtire" else "Ai $n învârtiri"
+            btn.alpha = if (n > 0) 1f else 0.45f
+        }
+        btn = button("Învârte roata") {
+            if (wheel.spinning) return@button
+            if (Cloud.spins(this) <= 0) {
+                Toast.makeText(this, "Nu ai învârtiri acum. Vezi mai jos cum câștigi.", Toast.LENGTH_LONG).show()
+                return@button
+            }
+            btn.isEnabled = false
+            resultBox.removeAllViews()
+            Cloud.spin(this) { o, msg ->
+                if (o == null) {
+                    btn.isEnabled = true
+                    Toast.makeText(this, if (msg.startsWith("Eroare")) "Nu am putut învârti acum ($msg). Încearcă din nou." else msg, Toast.LENGTH_LONG).show()
+                } else {
+                    val prize = o.optInt("prize_days", 0)
+                    wheel.spinTo(prize) {
+                        btn.isEnabled = true
+                        setSpinsText(o.optInt("spins_left", 0))
+                        val rc = card()
+                        rc.background = Ui.rounded(Ui.SURFACE, dp(18).toFloat(), if (prize > 0) Ui.GREEN else Ui.SURFACE2, dp(2))
+                        if (prize > 0) {
+                            rc.addView(tv("AI CÂȘTIGAT", 12f, Ui.MUTED, true))
+                            rc.addView(tv("+$prize " + (if (prize == 1) "zi gratuită" else "zile gratuite"), 26f, Ui.GREEN, true))
+                            if (o.optBoolean("test", false)) {
+                                rc.addView(tv("Test (cont admin/nelimitat): zilele nu se adaugă.", 12f, Ui.MUTED))
+                            } else {
+                                rc.addView(tv("Accesul tău acum: până la " + roDate(o.optString("after")), 15f, Ui.TEXT, true))
+                                rc.addView(tv("Înainte: " + roDate(o.optString("before")) + ". Zilele se adaugă peste ce aveai deja.", 12f, Ui.MUTED))
+                            }
+                        } else {
+                            rc.addView(tv("Mai încearcă", 22f, Ui.TEXT, true))
+                            rc.addView(tv("De data asta nu a ieșit nimic. Data viitoare!", 13f, Ui.MUTED))
+                        }
+                        resultBox.addView(rc)
+                        try { (getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator).vibrate(if (prize > 0) 220L else 60L) } catch (e: Exception) { }
+                        Cloud.refreshAccessAsync(this, true) { }
+                    }
+                }
+            }
+        }
+        content.addView(btn)
+        val rules = tv("Șanse și regulament", 13f, Ui.BRAND, true)
+        rules.gravity = Gravity.CENTER
+        rules.setPadding(0, dp(12), 0, dp(12))
+        rules.setOnClickListener { wheelRules() }
+        content.addView(rules)
+
+        val hc = card()
+        hc.addView(tv("CUM CÂȘTIGI ÎNVÂRTIRI", 12f, Ui.MUTED, true))
+        for ((t, sb) in listOf("Plătești o lună" to "+1 învârtire", "Un prieten plătește prima lună" to "+1 învârtire", "Bun venit, la crearea contului" to "+1 o dată")) {
+            val row = LinearLayout(this)
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(0, dp(10), 0, 0)
+            row.addView(tv(t, 14f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(tv(sb, 12f, Ui.MUTED))
+            hc.addView(row)
+        }
+        content.addView(hc)
+        content.addView(moreRow(R.drawable.ic_st_star, "Invită un prieten", "Cod personal și prietenii tăi") { tab = 10; render() })
+
+        // numărul real, de la server
+        Cloud.wheel(this) { o, _ -> if (o != null && !isFinishing && tab == 9 && !wheel.spinning) setSpinsText(o.optInt("spins", 0)) }
+        setSpinsText(Cloud.spins(this))
+    }
+
+    private fun renderFriends() {
+        content.addView(pageHeader("Mai mult", "Invită un prieten", { tab = 7; render() }))
+        val cc = card()
+        cc.gravity = Gravity.CENTER_HORIZONTAL
+        cc.addView(tv("Codul tău de prieten", 12f, Ui.MUTED, true))
+        val codeT = tv("…", 30f, Ui.TEXT, true)
+        codeT.gravity = Gravity.CENTER
+        codeT.setPadding(0, dp(6), 0, dp(4))
+        cc.addView(codeT)
+        val ex = tv("Prietenul descarcă aplicația de pe site, își face cont și scrie codul. Primește 7 zile gratuite, iar tu o învârtire la roată când prima lui plată e confirmată.", 12f, Ui.MUTED)
+        ex.gravity = Gravity.CENTER
+        cc.addView(ex)
+        var code = ""
+        val wa = button("Trimite pe WhatsApp") {
+            if (code.isEmpty()) return@button
+            val txt = "Folosesc DBX Pulse, aplicația care îți arată cât câștigi net pe km la fiecare cursă. Descarcă-o de aici: $SITE_URL . Fă-ți cont și scrie codul meu: $code. Primești 7 zile gratuite."
+            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/?text=" + Uri.encode(txt)))) }
+            catch (e: Exception) { Toast.makeText(this, "Nu am putut deschide WhatsApp.", Toast.LENGTH_LONG).show() }
+        }
+        cc.addView(wa)
+        val dl = tv("Descarcă aplicația: dbxpulse.netlify.app", 13f, Ui.BRAND, true)
+        dl.gravity = Gravity.CENTER
+        dl.setPadding(0, dp(12), 0, dp(2))
+        dl.setOnClickListener {
+            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SITE_URL))) } catch (e: Exception) { Toast.makeText(this, SITE_URL, Toast.LENGTH_LONG).show() }
+        }
+        cc.addView(dl)
+        val cp = tv("Copiază codul", 13f, Ui.BRAND, true)
+        cp.gravity = Gravity.CENTER
+        cp.setPadding(0, dp(12), 0, dp(2))
+        cp.setOnClickListener {
+            if (code.isNotEmpty()) {
+                (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("cod", code))
+                Toast.makeText(this, "Cod copiat.", Toast.LENGTH_SHORT).show()
+            }
+        }
+        cc.addView(cp)
+        content.addView(cc)
+
+        val stats = LinearLayout(this)
+        val statsLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        statsLp.bottomMargin = dp(12)
+        content.addView(stats, statsLp)
+        val listCard = card()
+        listCard.addView(tv("PRIETENII TĂI", 12f, Ui.MUTED, true))
+        val listBody = LinearLayout(this)
+        listBody.orientation = LinearLayout.VERTICAL
+        listCard.addView(listBody)
+        content.addView(listCard)
+
+        Cloud.wheel(this) { o, msg ->
+            if (isFinishing || tab != 10) return@wheel
+            if (o == null) { codeT.text = "—"; listBody.addView(tv(msg, 13f, Ui.MUTED)); return@wheel }
+            code = o.optString("friend_code", "")
+            codeT.text = code
+            fun stat(n: String, label: String, last: Boolean) {
+                val m = LinearLayout(this)
+                m.orientation = LinearLayout.VERTICAL
+                m.gravity = Gravity.CENTER
+                m.background = Ui.rounded(Ui.SURFACE, dp(16).toFloat(), Ui.SURFACE2, dp(1))
+                m.setPadding(dp(8), dp(12), dp(8), dp(12))
+                m.addView(tv(n, 24f, Ui.TEXT, true))
+                m.addView(tv(label, 11f, Ui.MUTED))
+                val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                if (!last) lp.rightMargin = dp(10)
+                stats.addView(m, lp)
+            }
+            stat(o.optInt("friends_total", 0).toString(), "prieteni aduși", false)
+            stat(o.optInt("friends_paid", 0).toString(), "au plătit", false)
+            stat(o.optInt("spins", 0).toString(), "învârtiri acum", true)
+            val a = o.optJSONArray("friends")
+            if (a == null || a.length() == 0) {
+                listBody.addView(tv("Încă nimeni. Trimite codul și apare aici.", 13f, Ui.MUTED))
+            } else {
+                for (i in 0 until a.length()) {
+                    val f = a.getJSONObject(i)
+                    val row = LinearLayout(this)
+                    row.gravity = Gravity.CENTER_VERTICAL
+                    row.setPadding(0, dp(10), 0, 0)
+                    row.addView(tv(f.optString("name", "Prieten"), 14f, Ui.TEXT, true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                    val st = f.optString("status")
+                    val txt = when (st) { "paid" -> "A plătit ✓"; "trial" -> "În probă · " + f.optInt("days_left", 0) + " zile"; else -> "Fără acces activ" }
+                    row.addView(tv(txt, 12f, if (st == "paid") Ui.GREEN else Ui.MUTED, true))
+                    listBody.addView(row)
+                }
+            }
+        }
+        val note = tv("O învârtire pentru fiecare prieten, o singură dată, când plata lui e confirmată.", 12f, Ui.MUTED)
+        note.setPadding(dp(4), dp(10), dp(4), 0)
+        content.addView(note)
+    }
+
     // ---------- MAI MULT ----------
     private fun moreRow(icon: Int, title: String, sub: String, go: () -> Unit): LinearLayout {
         val r = LinearLayout(this)
@@ -1647,6 +1905,8 @@ class MainActivity : Activity() {
     private fun renderMore() {
         content.addView(pageHeader("", "Mai mult"))
         accountCard()?.let { content.addView(it) }
+        content.addView(moreRow(R.drawable.ic_st_star, "Roata norocului", if (Cloud.spins(this) > 0) "Ai " + Cloud.spins(this) + (if (Cloud.spins(this) == 1) " învârtire" else " învârtiri") + ", învârte acum" else "Câștigă zile gratuite") { tab = 9; render() })
+        content.addView(moreRow(R.drawable.ic_q_book, "Invită un prieten", "Cod personal, prieteni, învârtiri") { tab = 10; render() })
         content.addView(moreRow(R.drawable.ic_q_clip, "Acte", "Documente, expirări, poze") { tab = 3; render() })
         content.addView(moreRow(R.drawable.ic_nav_gear, "Setări", "Simulator, costuri, praguri, alerte") { tab = 2; render() })
         content.addView(moreRow(R.drawable.ic_st_chart, "Aspect și culori", "Luminos, întunecat, culoarea aplicației, cardul") { tab = 8; render() })
@@ -1748,6 +2008,11 @@ class MainActivity : Activity() {
             c.addView(tv("CONT", 12f, Ui.MUTED, true))
             c.addView(tv(displayName() + (if (Cloud.role(this) == "admin") " · admin" else ""), 16f, Ui.TEXT, true))
             c.addView(tv(Cloud.email(this), 12f, Ui.MUTED))
+            if (Cloud.joined(this)) c.addView(button("Schimbă numele") {
+                askText("Numele tău", "Nume sau nickname", Cloud.name(this), false) { t ->
+                    Cloud.rename(this, t) { ok, msg -> refreshAfter(msg) }
+                }
+            })
             c.addView(button("Ieși din cont") { Cloud.logout(this); render() })
         } else {
             c.addView(tv("Nu ești conectat. Cu un cont păstrezi datele și intri în comunitate.", 13f, Ui.MUTED))
@@ -1865,7 +2130,8 @@ class MainActivity : Activity() {
         }
         if (Cloud.loggedIn(this)) {
             gd.addView(tv("Cont: " + displayName() + (if (Cloud.role(this) == "admin") " · admin" else ""), 12f, Ui.MUTED))
-            gd.addView(button("Reîmprospătează contul (rol și acces)") {
+            gd.addView(tv("Citește din nou de pe server câte zile de acces mai ai. Rolul îl stabilește doar serverul, nu se poate schimba din telefon.", 11f, Ui.MUTED))
+            gd.addView(button("Reîmprospătează contul (acces)") {
                 Cloud.refreshAccessAsync(this, true) {
                     Toast.makeText(this, "Cont actualizat.", Toast.LENGTH_SHORT).show()
                     render()
